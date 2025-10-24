@@ -9,7 +9,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛒 Commander", callback_data='order')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "👋 Bonjour ! Cliquez sur Commander pour passer votre commande.",
+        "Bonjour ! Cliquez sur Commander pour passer votre commande.",
         reply_markup=reply_markup
     )
 
@@ -29,7 +29,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if step == "photo" and update.message.photo:
             user_data[user_id]["photo"] = update.message.photo[-1].file_id
             user_data[user_id]["step"] = "prix"
-            await update.message.reply_text("💰 Indiquez le prix (20€ à 23€) :")
+            await update.message.reply_text("Indiquez le prix (20€ à 23€) :")
 
         # Prix
         elif step == "prix":
@@ -38,11 +38,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if 20 <= prix <= 23:
                     user_data[user_id]["prix"] = prix
                     user_data[user_id]["step"] = "adresse"
-                    await update.message.reply_text("🏠 Indiquez votre adresse :")
+                    await update.message.reply_text("Indiquez votre adresse :")
                 else:
-                    await update.message.reply_text("⚠️ Le prix doit être entre 20€ et 23€. Réessayez :")
+                    await update.message.reply_text("Le prix doit être entre 20€ et 23€. Réessayez :")
             except ValueError:
-                await update.message.reply_text("⚠️ Veuillez entrer un nombre valide :")
+                await update.message.reply_text("Veuillez entrer un nombre valide :")
 
         # Adresse
         elif step == "adresse":
@@ -52,7 +52,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("Virement", callback_data='virement')],
                 [InlineKeyboardButton("Revolut", callback_data='revolut')]
             ]
-            await update.message.reply_text("💳 Choisissez un mode de paiement :", reply_markup=InlineKeyboardMarkup(keyboard))
+            await update.message.reply_text("Choisissez un mode de paiement :", reply_markup=InlineKeyboardMarkup(keyboard))
             user_data[user_id]["step"] = "paiement"
 
 async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
