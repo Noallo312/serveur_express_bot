@@ -1,17 +1,29 @@
+import os
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
-from flask import Flask, request
-import os
-import asyncio
+from flask import Flask
 
-# ---- CONFIG ----
+# ---------------------------
+# Flask pour garder le bot actif
+# ---------------------------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "Bot actif !"
+
+def run():
+    app.run(host="0.0.0.0", port=3000)
+
+threading.Thread(target=run).start()
+
+# ---------------------------
+# Bot Telegram
+# ---------------------------
 ADMIN_ID = 6976573567
 user_data = {}
 
-BOT_TOKEN = os.environ.get("BOT_TOKEN")
-WEBHOOK_URL = os.environ.get("RENDER_EXTERNAL_URL")  # fourni automatiquement par Render
-
-# ---- TELEGRAM HANDLERS ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛒 Commander", callback_data='order')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -32,11 +44,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_data:
         step = user_data[user_id]["step"]
 
+        # Étape photo
         if step == "photo" and update.message.photo:
             user_data[user_id]["photo"] = update.message.photo[-1].file_id
             user_data[user_id]["step"] = "prix"
             await update.message.reply_text("💰 Indiquez le prix (20€ à 23€) :")
 
+        # Étape prix
         elif step == "prix":
             try:
                 prix = float(update.message.text.replace(",", "."))
@@ -49,6 +63,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await update.message.reply_text("⚠️ Veuillez entrer un nombre valide :")
 
+        # Étape adresse
         elif step == "adresse":
             user_data[user_id]["adresse"] = update.message.text
             keyboard = [
@@ -64,6 +79,7 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_id = query.from_user.id
     user_data[user_id]["paiement"] = query.data
+
     info = user_data[user_id]
 
     await context.bot.send_photo(
@@ -75,31 +91,15 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("✅ Votre commande a été envoyée ! Merci 😊")
     user_data.pop(user_id)
 
-# ---- FLASK SERVER (pour Render) ----
-app = Flask(__name__)
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+# ---------------------------
+# Démarrage du bot
+# ---------------------------
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-telegram_app.add_handler(CommandHandler("start", start))
-telegram_app.add_handler(CallbackQueryHandler(button, pattern='^order$'))
-telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
-telegram_app.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
+app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+app_bot.add_handler(CommandHandler("start", start))
+app_bot.add_handler(CallbackQueryHandler(button, pattern='^order$'))
+app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
+app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
 
-@app.route("/")
-def home():
-    return "Bot Telegram est en ligne 🚀"
-
-@app.route(f"/webhook/{BOT_TOKEN}", methods=["POST"])
-def webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    asyncio.run(telegram_app.process_update(update))
-    return "ok", 200
-
-# ---- LANCEMENT DU SERVEUR ----
-if __name__ == "__main__":
-    import requests
-    # Supprime les anciens webhooks
-    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook")
-    # Configure le nouveau webhook
-    requests.get(f"https://api.telegram.org/bot{BOT_TOKEN}/setWebhook?url={WEBHOOK_URL}/webhook/{BOT_TOKEN}")
-    print("✅ Webhook configuré avec succès !")
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+app_bot.run_polling()
