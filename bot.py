@@ -5,7 +5,7 @@ import os
 ADMIN_ID = 6976573567
 user_data = {}
 
-# Message d'accueil avec emoji
+# Message d'accueil
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton("🛒 Commander", callback_data='order')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -22,7 +22,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=query.from_user.id, text="📸 Envoyez une photo de votre panier.")
         user_data[query.from_user.id] = {"step": "photo"}
 
-# Formulaire étape par étape
+# Gestion du formulaire étape par étape
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id in user_data:
@@ -77,10 +77,9 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text("✅ Votre commande a été envoyée ! Merci 😊")
     user_data.pop(user_id)
 
-# Token depuis les variables d'environnement
+# Récupération du token depuis les variables d'environnement
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-# Configuration du bot
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CallbackQueryHandler(button, pattern='^order$'))
