@@ -21,22 +21,27 @@ def home():
     return "🤖 Serveur Express Bot actif !"
 
 def run():
-    app.run(host="0.0.0.0", port=5000)  # ✅ Replit utilise le port 5000
+    app.run(host="0.0.0.0", port=5000)  # Replit utilise le port 5000
 
 threading.Thread(target=run).start()
 
 # ---------------------------
 # Bot Telegram
 # ---------------------------
-ADMIN_ID = 6976573567  # ✅ ton ID
+# Liste des admins qui recevront les commandes
+ADMINS = [6976573567, 6193535472]  # Toi et l'autre personne
+
 user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton("🛒 Commander", callback_data='order')]]
+    keyboard = [
+        [InlineKeyboardButton("🛒 Commander", callback_data='order')],
+        [InlineKeyboardButton("📢 Rejoindre le bot", url="https://t.me/serveurs_express_bot")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "👋 Bonjour ! Bienvenue sur *Serveur Express Bot*.\n"
-        "Cliquez sur 🛒 *Commander* pour passer votre commande.",
+        "Cliquez sur 🛒 *Commander* pour passer votre commande ou rejoignez le bot via le bouton ci-dessous.",
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
@@ -94,7 +99,6 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user_id = query.from_user.id
 
-    # Vérifie si l'utilisateur a bien suivi tout le processus
     if user_id not in user_data:
         await query.message.reply_text("⚠️ Veuillez recommencer la commande avec /start.")
         return
@@ -102,18 +106,19 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data[user_id]["paiement"] = query.data
     info = user_data[user_id]
 
-    # Envoi au propriétaire (toi)
-    await context.bot.send_photo(
-        chat_id=ADMIN_ID,
-        photo=info["photo"],
-        caption=(
-            f"📦 *Nouvelle commande reçue !*\n\n"
-            f"💰 *Prix:* {info['prix']}€\n"
-            f"🏠 *Adresse:* {info['adresse']}\n"
-            f"💳 *Paiement:* {info['paiement']}"
-        ),
-        parse_mode="Markdown"
-    )
+    # Envoi de la commande à tous les admins
+    for admin_id in ADMINS:
+        await context.bot.send_photo(
+            chat_id=admin_id,
+            photo=info["photo"],
+            caption=(
+                f"📦 *Nouvelle commande reçue !*\n\n"
+                f"💰 Prix: {info['prix']}€\n"
+                f"🏠 Adresse: {info['adresse']}\n"
+                f"💳 Paiement: {info['paiement']}"
+            ),
+            parse_mode="Markdown"
+        )
 
     # Confirmation au client
     await query.message.reply_text("✅ Votre commande a bien été envoyée ! Merci pour votre confiance 🙏")
