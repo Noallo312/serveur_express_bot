@@ -39,7 +39,16 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     if query.data == 'order':
         await context.bot.send_message(chat_id=query.from_user.id, text="📸 Envoyez une photo de votre panier 🛍️.")
-        user_data[query.from_user.id] = {"step": "photo"}
+        
+        # Sauvegarder les infos du client
+        user = query.from_user
+        user_data[query.from_user.id] = {
+            "step": "photo",
+            "prenom": user.first_name,
+            "nom": user.last_name or "",
+            "username": f"@{user.username}" if user.username else "Pas de username",
+            "user_id": user.id
+        }
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -83,6 +92,9 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data[user_id]["paiement"] = query.data
 
     info = user_data[user_id]
+    
+    # Préparer le nom complet
+    nom_complet = f"{info['prenom']} {info['nom']}".strip()
 
     # Envoi de la commande à tous les admins
     for admin_id in ADMINS:
@@ -91,9 +103,12 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photo=info["photo"],
             caption=(
                 "📦 *Nouvelle commande reçue* 🔔\n\n"
-                f"💰 Prix : {info['prix']} €\n"
-                f"🏠 Adresse : {info['adresse']}\n"
-                f"💳 Paiement : {info['paiement']}"
+                f"👤 *Client :* {nom_complet}\n"
+                f"📱 *Username :* {info['username']}\n"
+                f"🆔 *ID Telegram :* `{info['user_id']}`\n\n"
+                f"💰 *Prix :* {info['prix']} €\n"
+                f"🏠 *Adresse :* {info['adresse']}\n"
+                f"💳 *Paiement :* {info['paiement']}"
             ),
             parse_mode="Markdown"
         )
