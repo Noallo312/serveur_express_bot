@@ -4,443 +4,275 @@ import sqlite3
 import csv
 from datetime import datetime
 from io import StringIO
-from flask import Flask
+from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
-# ---------------------------
-# Flask (pour le port web)
-# ---------------------------
+# Configuration
+BOT_TOKEN = os.getenv('BOT_TOKEN')
+ADMIN_IDS = [6976573567, 6193535472]  # Vos IDs admin
+
+# Flask app
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "🤖 Bot Telegram actif !"
-
-def run_flask():
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port, use_reloader=False)
-
-# ---------------------------
-# Configuration
-# ---------------------------
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ADMINS = [6976573567, 6193535472]
-
-# ---------------------------
-# Base de données SQLite
-# ---------------------------
+# Base de données
 def init_db():
-    conn = sqlite3.connect('commandes.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS commandes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            prenom TEXT,
-            nom TEXT,
-            username TEXT,
-            prix REAL,
-            adresse TEXT,
-            paiement TEXT,
-            date TEXT
-        )
-    ''')
+    c.execute('''CREATE TABLE IF NOT EXISTS orders
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  user_id INTEGER,
+                  username TEXT,
+                  photo_id TEXT,
+                  price REAL,
+                  address TEXT,
+                  payment TEXT,
+                  date TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_seen TEXT)''')
     conn.commit()
     conn.close()
 
-def save_commande(user_id, prenom, nom, username, prix, adresse, paiement):
-    conn = sqlite3.connect('commandes.db')
+init_db()
+
+# État des utilisateurs
+user_states = {}
+
+# Handlers du bot
+async def start(update: Update, context):
+    user_id = update.effective_user.id
+    username = update.effective_user.username or "Inconnu"
+    
+    # Enregistrer l'utilisateur
+    conn = sqlite3.connect('orders.db')
     c = conn.cursor()
-    date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    c.execute('''
-        INSERT INTO commandes (user_id, prenom, nom, username, prix, adresse, paiement, date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ''', (user_id, prenom, nom, username, prix, adresse, paiement, date))
+    c.execute('INSERT OR IGNORE INTO users VALUES (?, ?, ?)',
+              (user_id, username, datetime.now().isoformat()))
     conn.commit()
     conn.close()
-
-def get_stats():
-    conn = sqlite3.connect('commandes.db')
-    c = conn.cursor()
     
-    # Total commandes
-    c.execute('SELECT COUNT(*), SUM(prix) FROM commandes')
-    total, ca_total = c.fetchone()
-    total = total or 0
-    ca_total = ca_total or 0
-    
-    # Aujourd'hui
-    today = datetime.now().strftime("%Y-%m-%d")
-    c.execute('SELECT COUNT(*), SUM(prix) FROM commandes WHERE date LIKE ?', (f"{today}%",))
-    today_count, today_ca = c.fetchone()
-    today_count = today_count or 0
-    today_ca = today_ca or 0
-    
-    # Ce mois
-    this_month = datetime.now().strftime("%Y-%m")
-    c.execute('SELECT COUNT(*), SUM(prix) FROM commandes WHERE date LIKE ?', (f"{this_month}%",))
-    month_count, month_ca = c.fetchone()
-    month_count = month_count or 0
-    month_ca = month_ca or 0
-    
-    conn.close()
-    
-    return {
-        'total': total,
-        'ca_total': ca_total,
-        'today': today_count,
-        'today_ca': today_ca,
-        'month': month_count,
-        'month_ca': month_ca
-    }
-
-def get_historique(limit=10):
-    conn = sqlite3.connect('commandes.db')
-    c = conn.cursor()
-    c.execute('''
-        SELECT prenom, nom, username, prix, adresse, paiement, date 
-        FROM commandes 
-        ORDER BY id DESC 
-        LIMIT ?
-    ''', (limit,))
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-def get_all_user_ids():
-    conn = sqlite3.connect('commandes.db')
-    c = conn.cursor()
-    c.execute('SELECT DISTINCT user_id FROM commandes')
-    rows = c.fetchall()
-    conn.close()
-    return [row[0] for row in rows]
-
-def export_commandes():
-    conn = sqlite3.connect('commandes.db')
-    c = conn.cursor()
-    c.execute('SELECT * FROM commandes ORDER BY id DESC')
-    rows = c.fetchall()
-    conn.close()
-    return rows
-
-# ---------------------------
-# Commandes
-# ---------------------------
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🛒 Nouvelle commande", callback_data='order')]
-    ]
+    keyboard = [[InlineKeyboardButton("📦 Nouvelle commande", callback_data='order')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        "🍔 *Bienvenue sur Serveur Express !*\n\n"
-        "Commandez vos repas à prix réduit. 🔥\n\n"
-        "📝 Cliquez sur le bouton ci-dessous pour commander.",
-        parse_mode='Markdown',
+        f"👋 Bienvenue chez Serveur Express !\n\n"
+        f"Cliquez sur le bouton ci-dessous pour passer commande.",
         reply_markup=reply_markup
     )
 
-async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    if user_id not in ADMINS:
-        await update.message.reply_text("❌ Commande réservée aux admins.")
+async def stats(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Commande réservée aux admins")
         return
     
-    stats = get_stats()
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('SELECT COUNT(*), SUM(price) FROM orders')
+    count, total = c.fetchone()
+    c.execute('SELECT COUNT(*) FROM users')
+    user_count = c.fetchone()[0]
+    conn.close()
     
-    benef_total = stats['total'] * 5
-    benef_month = stats['month'] * 5
-    benef_today = stats['today'] * 5
+    total = total or 0
+    profit = count * 5 if count else 0
     
-    message = (
-        "📊 *STATISTIQUES DU SERVICE*\n\n"
-        f"📦 Total commandes : *{stats['total']}*\n"
-        f"📅 Aujourd'hui : *{stats['today']}*\n"
-        f"📆 Ce mois : *{stats['month']}*\n\n"
-        f"💰 Chiffre d'affaires total : *{stats['ca_total']:.2f} €*\n"
-        f"💵 Bénéfices totaux : *{benef_total:.2f} €* ({stats['total']} × 5€)\n"
-        f"📈 Bénéfices du mois : *{benef_month:.2f} €* ({stats['month']} × 5€)\n"
-        f"🎯 Bénéfices aujourd'hui : *{benef_today:.2f} €* ({stats['today']} × 5€)"
+    await update.message.reply_text(
+        f"📊 **Statistiques Serveur Express**\n\n"
+        f"👥 Clients: {user_count}\n"
+        f"📦 Commandes: {count}\n"
+        f"💰 CA total: {total:.2f}€\n"
+        f"💵 Bénéfices (5€/cmd): {profit:.2f}€",
+        parse_mode='Markdown'
     )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
 
-async def historique_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    if user_id not in ADMINS:
-        await update.message.reply_text("❌ Commande réservée aux admins.")
+async def historique(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Commande réservée aux admins")
         return
     
-    rows = get_historique(10)
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM orders ORDER BY id DESC LIMIT 10')
+    orders = c.fetchall()
+    conn.close()
     
-    if not rows:
-        await update.message.reply_text("📜 Aucune commande dans l'historique.")
+    if not orders:
+        await update.message.reply_text("📭 Aucune commande")
         return
     
-    message = "📜 *HISTORIQUE DES COMMANDES* (10 dernières)\n\n"
+    text = "📜 **10 dernières commandes:**\n\n"
+    for order in orders:
+        text += f"#{order[0]} - @{order[2]} - {order[4]:.2f}€ - {order[5][:30]}...\n"
     
-    for i, row in enumerate(rows, 1):
-        prenom, nom, username, prix, adresse, paiement, date = row
-        username_str = f"@{username}" if username else "N/A"
-        adresse_courte = adresse[:30] + "..." if len(adresse) > 30 else adresse
-        
-        message += (
-            f"*{i}.* {prenom} {nom} ({username_str})\n"
-            f"   💰 {prix}€ | 💳 {paiement}\n"
-            f"   🏠 {adresse_courte}\n"
-            f"   📅 {date}\n\n"
-        )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
+async def export(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Commande réservée aux admins")
+        return
     
-    if user_id not in ADMINS:
-        await update.message.reply_text("❌ Commande réservée aux admins.")
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('SELECT * FROM orders')
+    orders = c.fetchall()
+    conn.close()
+    
+    output = StringIO()
+    writer = csv.writer(output)
+    writer.writerow(['ID', 'User ID', 'Username', 'Photo ID', 'Prix', 'Adresse', 'Paiement', 'Date'])
+    writer.writerows(orders)
+    
+    output.seek(0)
+    await update.message.reply_document(
+        document=output.getvalue().encode('utf-8'),
+        filename=f'commandes_{datetime.now().strftime("%Y%m%d")}.csv'
+    )
+
+async def broadcast(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("❌ Commande réservée aux admins")
         return
     
     if not context.args:
-        await update.message.reply_text(
-            "❌ Usage : /broadcast [votre message]\n\n"
-            "Exemple : /broadcast Promo -2€ ce weekend ! 🎉"
-        )
+        await update.message.reply_text("Usage: /broadcast <message>")
         return
     
-    message_to_send = " ".join(context.args)
-    user_ids = get_all_user_ids()
-    
-    if not user_ids:
-        await update.message.reply_text("❌ Aucun client dans la base de données.")
-        return
-    
-    await update.message.reply_text(f"📢 Envoi en cours à {len(user_ids)} clients...")
+    message = ' '.join(context.args)
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('SELECT user_id FROM users')
+    users = c.fetchall()
+    conn.close()
     
     sent = 0
-    failed = 0
-    
-    for uid in user_ids:
+    for user in users:
         try:
-            await context.bot.send_message(
-                chat_id=uid,
-                text=f"📢 *Message de Serveur Express*\n\n{message_to_send}",
-                parse_mode='Markdown'
-            )
+            await context.bot.send_message(user[0], f"📢 {message}")
             sent += 1
-        except Exception as e:
-            failed += 1
+        except:
+            pass
     
-    await update.message.reply_text(
-        f"✅ Broadcast terminé !\n\n"
-        f"✅ Envoyés : {sent}\n"
-        f"❌ Échecs : {failed}"
-    )
+    await update.message.reply_text(f"✅ Message envoyé à {sent}/{len(users)} utilisateurs")
 
-async def export_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    
-    if user_id not in ADMINS:
-        await update.message.reply_text("❌ Commande réservée aux admins.")
-        return
-    
-    rows = export_commandes()
-    
-    if not rows:
-        await update.message.reply_text("❌ Aucune commande à exporter.")
-        return
-    
-    # Créer le CSV en mémoire
-    output = StringIO()
-    writer = csv.writer(output)
-    
-    # En-têtes
-    writer.writerow(['ID', 'User_ID', 'Prénom', 'Nom', 'Username', 'Prix', 'Adresse', 'Paiement', 'Date'])
-    
-    # Données
-    for row in rows:
-        writer.writerow(row)
-    
-    # Récupérer le contenu
-    csv_content = output.getvalue()
-    output.close()
-    
-    # Nom du fichier avec date/heure
-    filename = f"commandes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-    
-    # Envoyer le fichier
-    await update.message.reply_document(
-        document=csv_content.encode('utf-8'),
-        filename=filename,
-        caption=f"📊 Export de {len(rows)} commandes"
-    )
-
-# ---------------------------
-# Gestion des commandes
-# ---------------------------
-async def bouton(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
     
     if query.data == 'order':
-        context.user_data['step'] = 'photo'
-        await query.message.reply_text(
-            "📸 *Étape 1/4*\n\n"
-            "Envoyez une photo de votre panier.",
-            parse_mode='Markdown'
-        )
+        user_states[query.from_user.id] = 'waiting_photo'
+        await query.message.reply_text("📸 Envoyez la photo de ce que vous voulez commander")
 
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get('step') != 'photo':
-        return
+async def handle_message(update: Update, context):
+    user_id = update.effective_user.id
+    state = user_states.get(user_id)
     
-    photo = update.message.photo[-1]
-    context.user_data['photo'] = photo.file_id
-    context.user_data['step'] = 'prix'
+    if state == 'waiting_photo' and update.message.photo:
+        user_states[user_id] = {'state': 'waiting_price', 'photo': update.message.photo[-1].file_id}
+        await update.message.reply_text("💰 Quel est le prix ?")
     
-    await update.message.reply_text(
-        "💰 *Étape 2/4*\n\n"
-        "Quel est le prix de votre commande ?\n"
-        "(Entre 20€ et 23€)",
-        parse_mode='Markdown'
-    )
-
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    step = context.user_data.get('step')
-    
-    if step == 'prix':
+    elif state and isinstance(state, dict) and state['state'] == 'waiting_price':
         try:
-            prix = float(update.message.text.replace(',', '.'))
-            if 20 <= prix <= 23:
-                context.user_data['prix'] = prix
-                context.user_data['step'] = 'adresse'
-                await update.message.reply_text(
-                    "🏠 *Étape 3/4*\n\n"
-                    "Quelle est votre adresse de livraison ?",
-                    parse_mode='Markdown'
-                )
-            else:
-                await update.message.reply_text("❌ Le prix doit être entre 20€ et 23€.")
-        except ValueError:
-            await update.message.reply_text("❌ Veuillez entrer un prix valide (ex: 21.5)")
+            price = float(update.message.text)
+            state['price'] = price
+            state['state'] = 'waiting_address'
+            await update.message.reply_text("📍 Quelle est l'adresse de livraison ?")
+        except:
+            await update.message.reply_text("❌ Prix invalide. Entrez un nombre.")
     
-    elif step == 'adresse':
-        context.user_data['adresse'] = update.message.text
-        context.user_data['step'] = 'paiement'
-        
-        keyboard = [
-            [InlineKeyboardButton("💳 PayPal", callback_data='pay_paypal')],
-            [InlineKeyboardButton("🏦 Virement", callback_data='pay_virement')],
-            [InlineKeyboardButton("💸 Revolut", callback_data='pay_revolut')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await update.message.reply_text(
-            "💳 *Étape 4/4*\n\n"
-            "Choisissez votre mode de paiement :",
-            parse_mode='Markdown',
-            reply_markup=reply_markup
-        )
+    elif state and isinstance(state, dict) and state['state'] == 'waiting_address':
+        state['address'] = update.message.text
+        state['state'] = 'waiting_payment'
+        keyboard = [[InlineKeyboardButton("💳 CB", callback_data='pay_cb'),
+                    InlineKeyboardButton("💵 Espèces", callback_data='pay_cash')]]
+        await update.message.reply_text("💳 Mode de paiement ?", reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def handle_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def payment_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
+    user_id = query.from_user.id
+    state = user_states.get(user_id)
     
-    payment_methods = {
-        'pay_paypal': 'PayPal',
-        'pay_virement': 'Virement',
-        'pay_revolut': 'Revolut'
-    }
+    if not state or not isinstance(state, dict):
+        return
     
-    paiement = payment_methods.get(query.data)
+    payment = "CB" if query.data == 'pay_cb' else "Espèces"
+    username = query.from_user.username or "Inconnu"
     
-    if paiement:
-        context.user_data['paiement'] = paiement
-        
-        user = query.from_user
-        user_id = user.id
-        prenom = user.first_name or "N/A"
-        nom = user.last_name or ""
-        username = user.username or "N/A"
-        
-        info = context.user_data
-        
-        # Sauvegarder dans la base de données
-        save_commande(
-            user_id=user_id,
-            prenom=prenom,
-            nom=nom,
-            username=username,
-            prix=info['prix'],
-            adresse=info['adresse'],
-            paiement=paiement
-        )
-        
-        # Message pour le client
-        await query.message.reply_text(
-            "✅ *Commande envoyée !*\n\n"
-            "Nous allons traiter votre demande rapidement. 🚀\n"
-            "Vous serez contacté pour le paiement.",
-            parse_mode='Markdown'
-        )
-        
-        # Message pour les admins avec infos du client
-        caption = (
-            "📦 *Nouvelle commande reçue* 🔔\n\n"
-            f"👤 *Client :* {prenom} {nom}\n"
-            f"📱 *Username :* @{username}\n"
-            f"🆔 *ID Telegram :* `{user_id}`\n\n"
-            f"💰 *Prix :* {info['prix']} €\n"
-            f"🏠 *Adresse :* {info['adresse']}\n"
-            f"💳 *Paiement :* {paiement}"
-        )
-        
-        for admin_id in ADMINS:
-            try:
-                await context.bot.send_photo(
-                    chat_id=admin_id,
-                    photo=info['photo'],
-                    caption=caption,
-                    parse_mode='Markdown'
-                )
-            except Exception as e:
-                print(f"Erreur envoi admin {admin_id}: {e}")
-        
-        context.user_data.clear()
+    # Enregistrer la commande
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('INSERT INTO orders VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)',
+              (user_id, username, state['photo'], state['price'], 
+               state['address'], payment, datetime.now().isoformat()))
+    conn.commit()
+    order_id = c.lastrowid
+    conn.close()
+    
+    # Confirmation client
+    await query.message.reply_text(
+        f"✅ Commande #{order_id} enregistrée !\n\n"
+        f"Prix: {state['price']:.2f}€\n"
+        f"Adresse: {state['address']}\n"
+        f"Paiement: {payment}\n\n"
+        f"Nous vous contacterons bientôt !"
+    )
+    
+    # Notification admin
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_photo(
+                admin_id,
+                state['photo'],
+                caption=f"🆕 Nouvelle commande #{order_id}\n\n"
+                        f"Client: @{username}\n"
+                        f"Prix: {state['price']:.2f}€\n"
+                        f"Adresse: {state['address']}\n"
+                        f"Paiement: {payment}"
+            )
+        except:
+            pass
+    
+    del user_states[user_id]
 
-# ---------------------------
-# Main
-# ---------------------------
+# Application Telegram
+telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+
+telegram_app.add_handler(CommandHandler('start', start))
+telegram_app.add_handler(CommandHandler('stats', stats))
+telegram_app.add_handler(CommandHandler('historique', historique))
+telegram_app.add_handler(CommandHandler('export', export))
+telegram_app.add_handler(CommandHandler('broadcast', broadcast))
+telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern='^order$'))
+telegram_app.add_handler(CallbackQueryHandler(payment_callback, pattern='^pay_'))
+telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
+
+# Webhook Flask
+@app.route(f'/{BOT_TOKEN}', methods=['POST'])
+async def webhook():
+    update = Update.de_json(request.get_json(), telegram_app.bot)
+    await telegram_app.process_update(update)
+    return 'ok'
+
+@app.route('/')
+def index():
+    return 'Bot is running!'
+
+# Configuration du webhook au démarrage
+async def setup_webhook():
+    webhook_url = f"https://serveur-express-bot-1.onrender.com/{BOT_TOKEN}"
+    await telegram_app.bot.set_webhook(webhook_url)
+    print(f"✅ Webhook configuré: {webhook_url}")
+
 def main():
-    # Initialiser la base de données
-    init_db()
+    # Configuration initiale du webhook
+    import asyncio
+    asyncio.run(setup_webhook())
     
-    # Démarrer Flask dans un thread séparé
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    print("🤖 Bot Telegram démarré...")
-    
-    # Créer l'application Telegram
-    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    # Commandes
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("stats", stats_command))
-    app_bot.add_handler(CommandHandler("historique", historique_command))
-    app_bot.add_handler(CommandHandler("broadcast", broadcast_command))
-    app_bot.add_handler(CommandHandler("export", export_command))
-    
-    # Gestion du flux de commande
-    app_bot.add_handler(CallbackQueryHandler(bouton, pattern='^order$'))
-    app_bot.add_handler(CallbackQueryHandler(handle_payment, pattern='^pay_'))
-    app_bot.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-    app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
-    
-    # Démarrer le bot (drop_pending_updates pour éviter les conflits)
-    app_bot.run_polling(drop_pending_updates=True)
+    # Démarrer Flask
+    print("🤖 Bot Telegram en mode Webhook...")
+    app.run(host='0.0.0.0', port=10000)
 
 if __name__ == '__main__':
     main()
