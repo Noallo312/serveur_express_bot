@@ -1,20 +1,26 @@
 import os
+import threading
 import sqlite3
 import csv
 from datetime import datetime
 from io import StringIO
-from flask import Flask, request
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-import asyncio
-from threading import Thread
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 6193535472]  # Vos IDs admin
 
-# Flask app
+# Flask app pour garder le service actif
 app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "🤖 Bot Telegram actif!"
+
+def run_flask():
+    app.run(host='0.0.0.0', port=10000)
 
 # Base de données
 def init_db():
@@ -40,10 +46,6 @@ init_db()
 
 # État des utilisateurs
 user_states = {}
-
-# Loop asyncio global
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 
 # Handlers du bot
 async def start(update: Update, context):
@@ -241,65 +243,32 @@ async def payment_callback(update: Update, context):
     
     del user_states[user_id]
 
-# Application Telegram
-telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-telegram_app.add_handler(CommandHandler('start', start))
-telegram_app.add_handler(CommandHandler('stats', stats))
-telegram_app.add_handler(CommandHandler('historique', historique))
-telegram_app.add_handler(CommandHandler('export', export))
-telegram_app.add_handler(CommandHandler('broadcast', broadcast))
-telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern='^order$'))
-telegram_app.add_handler(CallbackQueryHandler(payment_callback, pattern='^pay_'))
-telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
-
-# Webhook Flask
-@app.route(f'/{BOT_TOKEN}', methods=['POST'])
-def webhook():
-    # Répondre immédiatement à Telegram
-    data = request.get_json()
-    
-    # Traiter l'update en arrière-plan
-    def process_update():
-        update = Update.de_json(data, telegram_app.bot)
-        asyncio.run_coroutine_threadsafe(
-            telegram_app.process_update(update),
-            loop
-        )
-    
-    # Lancer le traitement dans un thread
-    Thread(target=process_update, daemon=True).start()
-    
-    # Réponse immédiate pour Telegram
-    return 'ok', 200
-
-@app.route('/')
-def index():
-    return 'Bot is running!'
-
-def run_async_loop():
-    """Exécute la boucle d'événements dans un thread séparé"""
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
-
 def main():
-    print("🔧 Initialisation du bot...")
+    # Supprimer le webhook s'il existe
+    import requests
+    requests.get(f'https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook')
+    print("🔧 Webhook supprimé")
     
-    # Initialiser le bot dans la boucle
-    loop.run_until_complete(telegram_app.initialize())
+    # Démarrer Flask dans un thread séparé
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    print("🌐 Flask démarré")
     
-    # Configurer le webhook
-    webhook_url = f"https://serveur-express-bot-1.onrender.com/{BOT_TOKEN}"
-    loop.run_until_complete(telegram_app.bot.set_webhook(webhook_url))
-    print(f"✅ Webhook configuré: {webhook_url}")
+    # Application Telegram
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # Démarrer la boucle asyncio dans un thread
-    thread = Thread(target=run_async_loop, daemon=True)
-    thread.start()
+    app_bot.add_handler(CommandHandler('start', start))
+    app_bot.add_handler(CommandHandler('stats', stats))
+    app_bot.add_handler(CommandHandler('historique', historique))
+    app_bot.add_handler(CommandHandler('export', export))
+    app_bot.add_handler(CommandHandler('broadcast', broadcast))
+    app_bot.add_handler(CallbackQueryHandler(button_callback, pattern='^order$'))
+    app_bot.add_handler(CallbackQueryHandler(payment_callback, pattern='^pay_'))
+    app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
     
-    # Démarrer Flask
-    print("🤖 Bot Telegram en mode Webhook...")
-    app.run(host='0.0.0.0', port=10000)
+    # Démarrer le bot en mode POLLING (drop_pending_updates pour éviter les conflits)
+    print("🤖 Bot Telegram démarré en mode POLLING...")
+    app_bot.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
     main()
