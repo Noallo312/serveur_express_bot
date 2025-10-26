@@ -1,30 +1,27 @@
 import os
 import threading
+from flask import Flask
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
-from flask import Flask
 
 # ---------------------------
-# Flask pour garder le bot actif
+# Flask (pour le port requis par Railway)
 # ---------------------------
-app = Flask("")
+app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot actif et en ligne 🚀"
+    return "Bot actif et hébergé sur Railway 🚀"
 
-def run():
-    app.run(host="0.0.0.0", port=3000)
-
-threading.Thread(target=run).start()
+def run_flask():
+    port = int(os.environ.get("PORT", 3000))
+    app.run(host="0.0.0.0", port=port)
 
 # ---------------------------
 # Bot Telegram
 # ---------------------------
 
-# Liste des admins qui reçoivent les commandes
 ADMINS = [6976573567, 6193535472]
-
 user_data = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -49,13 +46,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in user_data:
         step = user_data[user_id]["step"]
 
-        # Étape photo
         if step == "photo" and update.message.photo:
             user_data[user_id]["photo"] = update.message.photo[-1].file_id
             user_data[user_id]["step"] = "prix"
             await update.message.reply_text("💰 Indiquez le prix (entre 20 € et 23 €) :")
 
-        # Étape prix
         elif step == "prix":
             try:
                 prix = float(update.message.text.replace(",", "."))
@@ -68,7 +63,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except ValueError:
                 await update.message.reply_text("⚠️ Veuillez entrer un nombre valide (exemple : 21.5).")
 
-        # Étape adresse
         elif step == "adresse":
             user_data[user_id]["adresse"] = update.message.text
             keyboard = [
@@ -104,7 +98,7 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-    # Message de confirmation au client
+    # Confirmation utilisateur
     await query.message.reply_text(
         "✅ *Votre commande a bien été envoyée !* 🎉\n\n"
         "Merci pour votre confiance 🤝\n"
@@ -112,18 +106,26 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-    # Supprimer les données utilisateur
-    user_data.pop(user_id)
+    user_data.pop(user_id, None)
 
 # ---------------------------
-# Lancement du bot
+# Lancement du bot et du serveur
 # ---------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-app_bot.add_handler(CommandHandler("start", start))
-app_bot.add_handler(CallbackQueryHandler(button, pattern='^order$'))
-app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
-app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
+async def main():
+    app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    app_bot.add_handler(CommandHandler("start", start))
+    app_bot.add_handler(CallbackQueryHandler(button, pattern='^order$'))
+    app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
+    app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
 
-app_bot.run_polling()
+    # Lancer Flask dans un thread séparé
+    threading.Thread(target=run_flask).start()
+
+    # Démarrer le bot Telegram
+    await app_bot.run_polling()
+
+if __name__ == "__main__":
+    import asyncio
+    asyncio.run(main())
