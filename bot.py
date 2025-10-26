@@ -256,13 +256,22 @@ telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
 # Webhook Flask
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
-    update = Update.de_json(request.get_json(), telegram_app.bot)
-    # Exécuter dans la boucle persistante
-    asyncio.run_coroutine_threadsafe(
-        telegram_app.process_update(update),
-        loop
-    )
-    return 'ok'
+    # Répondre immédiatement à Telegram
+    data = request.get_json()
+    
+    # Traiter l'update en arrière-plan
+    def process_update():
+        update = Update.de_json(data, telegram_app.bot)
+        asyncio.run_coroutine_threadsafe(
+            telegram_app.process_update(update),
+            loop
+        )
+    
+    # Lancer le traitement dans un thread
+    Thread(target=process_update, daemon=True).start()
+    
+    # Réponse immédiate pour Telegram
+    return 'ok', 200
 
 @app.route('/')
 def index():
