@@ -41,6 +41,10 @@ init_db()
 # État des utilisateurs
 user_states = {}
 
+# Loop asyncio global
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 # Handlers du bot
 async def start(update: Update, context):
     user_id = update.effective_user.id
@@ -249,34 +253,40 @@ telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern='^order$'
 telegram_app.add_handler(CallbackQueryHandler(payment_callback, pattern='^pay_'))
 telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
 
-# Webhook Flask (VERSION SYNCHRONE)
+# Webhook Flask
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
 def webhook():
     update = Update.de_json(request.get_json(), telegram_app.bot)
-    # Exécuter le traitement de manière asynchrone
-    asyncio.run(telegram_app.process_update(update))
+    # Exécuter dans la boucle persistante
+    asyncio.run_coroutine_threadsafe(
+        telegram_app.process_update(update),
+        loop
+    )
     return 'ok'
 
 @app.route('/')
 def index():
     return 'Bot is running!'
 
-# Configuration du webhook au démarrage
-def setup_webhook():
-    webhook_url = f"https://serveur-express-bot-1.onrender.com/{BOT_TOKEN}"
-    
-    async def configure():
-        await telegram_app.bot.set_webhook(webhook_url)
-        print(f"✅ Webhook configuré: {webhook_url}")
-    
-    asyncio.run(configure())
+def run_async_loop():
+    """Exécute la boucle d'événements dans un thread séparé"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
 def main():
-    # Initialiser le bot
-    asyncio.run(telegram_app.initialize())
+    print("🔧 Initialisation du bot...")
     
-    # Configuration du webhook
-    setup_webhook()
+    # Initialiser le bot dans la boucle
+    loop.run_until_complete(telegram_app.initialize())
+    
+    # Configurer le webhook
+    webhook_url = f"https://serveur-express-bot-1.onrender.com/{BOT_TOKEN}"
+    loop.run_until_complete(telegram_app.bot.set_webhook(webhook_url))
+    print(f"✅ Webhook configuré: {webhook_url}")
+    
+    # Démarrer la boucle asyncio dans un thread
+    thread = Thread(target=run_async_loop, daemon=True)
+    thread.start()
     
     # Démarrer Flask
     print("🤖 Bot Telegram en mode Webhook...")
