@@ -70,6 +70,31 @@ def get_historique(limit=10):
     conn.close()
     return results
 
+def get_all_user_ids():
+    conn = sqlite3.connect('commandes.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT DISTINCT user_id FROM commandes")
+    results = c.fetchall()
+    conn.close()
+    return [row[0] for row in results]
+
+def export_to_csv():
+    conn = sqlite3.connect('commandes.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute('''SELECT id, user_id, prenom, nom, username, prix, adresse, paiement, date 
+                 FROM commandes ORDER BY id DESC''')
+    results = c.fetchall()
+    conn.close()
+    
+    # Créer le CSV
+    csv_content = "ID,User_ID,Prénom,Nom,Username,Prix,Adresse,Paiement,Date\n"
+    for row in results:
+        # Échapper les virgules dans les adresses
+        adresse_clean = str(row[6]).replace(",", ";")
+        csv_content += f"{row[0]},{row[1]},{row[2]},{row[3]},{row[4]},{row[5]},{adresse_clean},{row[7]},{row[8]}\n"
+    
+    return csv_content
+
 # ---------------------------
 # Flask (pour le port requis par Render)
 # ---------------------------
@@ -149,6 +174,77 @@ async def historique(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
     
     await update.message.reply_text(message, parse_mode="Markdown")
+
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id not in ADMINS:
+        await update.message.reply_text("⛔ Cette commande est réservée aux administrateurs.")
+        return
+    
+    # Vérifier qu'il y a un message
+    if not context.args:
+        await update.message.reply_text(
+            "❌ *Usage :* `/broadcast [votre message]`\n\n"
+            "*Exemple :*\n"
+            "`/broadcast 🎉 Promo -2€ ce weekend sur toutes les commandes !`",
+            parse_mode="Markdown"
+        )
+        return
+    
+    # Récupérer le message
+    message_to_send = " ".join(context.args)
+    
+    # Récupérer tous les user_ids
+    user_ids = get_all_user_ids()
+    
+    if not user_ids:
+        await update.message.reply_text("📭 Aucun client dans la base de données.")
+        return
+    
+    # Envoyer à tous les clients
+    success = 0
+    failed = 0
+    
+    for user_id in user_ids:
+        try:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text=f"📢 *Message de Serveur Express*\n\n{message_to_send}",
+                parse_mode="Markdown"
+            )
+            success += 1
+        except Exception as e:
+            failed += 1
+    
+    # Confirmation à l'admin
+    await update.message.reply_text(
+        f"✅ *Message envoyé !*\n\n"
+        f"📤 Envoyés : {success}\n"
+        f"❌ Échecs : {failed}",
+        parse_mode="Markdown"
+    )
+
+async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.message.from_user.id not in ADMINS:
+        await update.message.reply_text("⛔ Cette commande est réservée aux administrateurs.")
+        return
+    
+    csv_content = export_to_csv()
+    
+    if csv_content == "ID,User_ID,Prénom,Nom,Username,Prix,Adresse,Paiement,Date\n":
+        await update.message.reply_text("📭 Aucune commande à exporter.")
+        return
+    
+    # Envoyer le fichier CSV
+    from io import BytesIO
+    csv_file = BytesIO(csv_content.encode('utf-8'))
+    csv_file.name = f"commandes_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    
+    await update.message.reply_document(
+        document=csv_file,
+        filename=csv_file.name,
+        caption="📊 *Export des commandes*\n\nOuvrez avec Excel ou Google Sheets",
+        parse_mode="Markdown"
+    )
 
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -267,9 +363,37 @@ def main():
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CommandHandler("stats", stats))
     app_bot.add_handler(CommandHandler("historique", historique))
-    app_bot.add_handler(CallbackQueryHandler(button, pattern='^order$'))
+    app_bot.add_handler(CommandHandler("broadcast", broadcast))
+    app_bot.add_handler(CommandHandler("export", export))
+    app_bot.add_handler(CallbackQueryHandler(button, pattern='^order
+
+    # Lancer Flask dans un thread séparé
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Démarrer le bot Telegram (bloquant)
+    print("🤖 Bot Telegram démarré...")
+    print("📊 Base de données initialisée...")
+    app_bot.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
+))
     app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
-    app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
+    app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)
+
+    # Lancer Flask dans un thread séparé
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+
+    # Démarrer le bot Telegram (bloquant)
+    print("🤖 Bot Telegram démarré...")
+    print("📊 Base de données initialisée...")
+    app_bot.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == "__main__":
+    main()
+))
 
     # Lancer Flask dans un thread séparé
     flask_thread = threading.Thread(target=run_flask, daemon=True)
