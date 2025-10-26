@@ -439,8 +439,8 @@ def main():
     app_bot.add_handler(MessageHandler(filters.PHOTO, handle_photo))
     app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
-    # Démarrer le bot
-    app_bot.run_polling()
+    # Démarrer le bot (drop_pending_updates pour éviter les conflits)
+    app_bot.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
     main()
