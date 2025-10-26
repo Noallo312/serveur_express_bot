@@ -35,22 +35,34 @@ init_db()
 # États des utilisateurs
 user_states = {}
 
-def delete_webhook():
-    """Supprime le webhook et attend pour éviter les conflits"""
+def force_kill_all_instances():
+    """Force la suppression de TOUTES les instances actives"""
+    print("🔥 Forçage de la suppression de toutes les instances...")
+    
     try:
+        # 1. Supprimer le webhook avec drop_pending_updates
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        response = requests.get(url)
-        if response.json().get('ok'):
-            print("🔧 Webhook supprimé")
-            time.sleep(3)  # Attendre 3 secondes pour que Telegram traite la suppression
-        
-        # Vérifier qu'il n'y a plus de getUpdates actifs
-        url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1&timeout=1"
-        requests.get(url2, timeout=2)
-        print("✅ Nettoyage des updates effectué")
+        response = requests.get(url, timeout=10)
+        print(f"🔧 Webhook supprimé: {response.json()}")
         time.sleep(2)
+        
+        # 2. Faire plusieurs appels getUpdates pour forcer la déconnexion des autres instances
+        print("⚡ Forçage de déconnexion des autres instances...")
+        for i in range(5):
+            try:
+                url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1&timeout=1"
+                requests.get(url2, timeout=3)
+                print(f"   Tentative {i+1}/5...")
+                time.sleep(1)
+            except:
+                pass
+        
+        print("✅ Toutes les instances ont été forcées à se déconnecter")
+        time.sleep(3)  # Attendre que tout se stabilise
+        
     except Exception as e:
-        print(f"❌ Erreur lors de la suppression du webhook: {e}")
+        print(f"⚠️ Erreur pendant le nettoyage: {e}")
+        time.sleep(2)
 
 # Commande /start
 async def start(update: Update, context):
@@ -308,21 +320,22 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.ALL, handle_message))
     
-    # Supprimer webhook et nettoyer
-    delete_webhook()
+    # Forcer la suppression de toutes les instances
+    force_kill_all_instances()
     
     print("🤖 Bot Telegram démarré en mode POLLING...")
     
-    # Démarrer le bot avec retry sur conflit
-    max_retries = 3
+    # Démarrer le bot avec retry agressif sur conflit
+    max_retries = 5
     for attempt in range(max_retries):
         try:
             application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
             break
         except Exception as e:
             if "Conflict" in str(e) and attempt < max_retries - 1:
-                print(f"⚠️ Conflit détecté, nouvelle tentative dans 5 secondes... ({attempt + 1}/{max_retries})")
-                time.sleep(5)
-                delete_webhook()  # Re-nettoyer
+                print(f"⚠️ CONFLIT DÉTECTÉ ! Nouvelle tentative dans 10 secondes... ({attempt + 1}/{max_retries})")
+                time.sleep(10)
+                force_kill_all_instances()  # Re-forcer le nettoyage
             else:
+                print(f"❌ Échec après {max_retries} tentatives")
                 raise
