@@ -1,5 +1,4 @@
 import os
-import threading
 import sqlite3
 import csv
 from datetime import datetime
@@ -7,6 +6,8 @@ from io import StringIO
 from flask import Flask, request
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+import asyncio
+from threading import Thread
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -248,11 +249,12 @@ telegram_app.add_handler(CallbackQueryHandler(button_callback, pattern='^order$'
 telegram_app.add_handler(CallbackQueryHandler(payment_callback, pattern='^pay_'))
 telegram_app.add_handler(MessageHandler(filters.ALL, handle_message))
 
-# Webhook Flask
+# Webhook Flask (VERSION SYNCHRONE)
 @app.route(f'/{BOT_TOKEN}', methods=['POST'])
-async def webhook():
+def webhook():
     update = Update.de_json(request.get_json(), telegram_app.bot)
-    await telegram_app.process_update(update)
+    # Exécuter le traitement de manière asynchrone
+    asyncio.run(telegram_app.process_update(update))
     return 'ok'
 
 @app.route('/')
@@ -260,15 +262,21 @@ def index():
     return 'Bot is running!'
 
 # Configuration du webhook au démarrage
-async def setup_webhook():
+def setup_webhook():
     webhook_url = f"https://serveur-express-bot-1.onrender.com/{BOT_TOKEN}"
-    await telegram_app.bot.set_webhook(webhook_url)
-    print(f"✅ Webhook configuré: {webhook_url}")
+    
+    async def configure():
+        await telegram_app.bot.set_webhook(webhook_url)
+        print(f"✅ Webhook configuré: {webhook_url}")
+    
+    asyncio.run(configure())
 
 def main():
-    # Configuration initiale du webhook
-    import asyncio
-    asyncio.run(setup_webhook())
+    # Initialiser le bot
+    asyncio.run(telegram_app.initialize())
+    
+    # Configuration du webhook
+    setup_webhook()
     
     # Démarrer Flask
     print("🤖 Bot Telegram en mode Webhook...")
