@@ -5,17 +5,17 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters, CallbackQueryHandler
 
 # ---------------------------
-# Flask (pour le port requis par Railway)
+# Flask (pour le port requis par Render)
 # ---------------------------
 app = Flask(__name__)
 
 @app.route("/")
 def home():
-    return "Bot actif et hébergé sur Railway 🚀"
+    return "Bot actif et hébergé sur Render 🚀"
 
 def run_flask():
-    port = int(os.environ.get("PORT", 3000))
-    app.run(host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, use_reloader=False)
 
 # ---------------------------
 # Bot Telegram
@@ -102,7 +102,7 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         "✅ *Votre commande a bien été envoyée !* 🎉\n\n"
         "Merci pour votre confiance 🤝\n"
-        "📦 Vous recevrez le lien de suivi d’ici peu 🚚💨",
+        "📦 Vous recevrez le lien de suivi d'ici peu 🚚💨",
         parse_mode="Markdown"
     )
 
@@ -113,19 +113,23 @@ async def payment_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------------------------
 BOT_TOKEN = os.environ.get("BOT_TOKEN")
 
-async def main():
+def main():
+    # Créer l'application bot
     app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Ajouter les handlers
     app_bot.add_handler(CommandHandler("start", start))
     app_bot.add_handler(CallbackQueryHandler(button, pattern='^order$'))
     app_bot.add_handler(MessageHandler(filters.ALL, handle_message))
     app_bot.add_handler(CallbackQueryHandler(payment_choice, pattern='^(paypal|virement|revolut)$'))
 
     # Lancer Flask dans un thread séparé
-    threading.Thread(target=run_flask).start()
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
 
-    # Démarrer le bot Telegram
-    await app_bot.run_polling()
+    # Démarrer le bot Telegram (bloquant)
+    print("🤖 Bot Telegram démarré...")
+    app_bot.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+    main()
