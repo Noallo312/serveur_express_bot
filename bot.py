@@ -60,12 +60,12 @@ async def start(update: Update, context):
     conn.commit()
     conn.close()
     
-    keyboard = [[InlineKeyboardButton("📦 Nouvelle commande", callback_data='order')]]
+    keyboard = [[InlineKeyboardButton("🛒 Commander", callback_data='order')]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await update.message.reply_text(
-        f"👋 Bienvenue chez Serveur Express !\n\n"
-        f"Cliquez sur le bouton ci-dessous pour passer commande.",
+        f"👋 Bonjour ! Bienvenue sur Serveur Express Bot.\n\n"
+        f"Cliquez sur 🛒 Commander pour passer votre commande.",
         reply_markup=reply_markup
     )
 
@@ -169,7 +169,7 @@ async def button_callback(update: Update, context):
     
     if query.data == 'order':
         user_states[query.from_user.id] = 'waiting_photo'
-        await query.message.reply_text("📸 Envoyez la photo de ce que vous voulez commander")
+        await query.message.reply_text("📸 Envoyez la photo de votre article :")
 
 async def handle_message(update: Update, context):
     user_id = update.effective_user.id
@@ -177,23 +177,26 @@ async def handle_message(update: Update, context):
     
     if state == 'waiting_photo' and update.message.photo:
         user_states[user_id] = {'state': 'waiting_price', 'photo': update.message.photo[-1].file_id}
-        await update.message.reply_text("💰 Quel est le prix ?")
+        await update.message.reply_text("💰 Indiquez le prix (entre 20€ et 23€) :")
     
     elif state and isinstance(state, dict) and state['state'] == 'waiting_price':
         try:
             price = float(update.message.text)
             state['price'] = price
             state['state'] = 'waiting_address'
-            await update.message.reply_text("📍 Quelle est l'adresse de livraison ?")
+            await update.message.reply_text("🏠 Entrez maintenant votre adresse :")
         except:
             await update.message.reply_text("❌ Prix invalide. Entrez un nombre.")
     
     elif state and isinstance(state, dict) and state['state'] == 'waiting_address':
         state['address'] = update.message.text
         state['state'] = 'waiting_payment'
-        keyboard = [[InlineKeyboardButton("💳 CB", callback_data='pay_cb'),
-                    InlineKeyboardButton("💵 Espèces", callback_data='pay_cash')]]
-        await update.message.reply_text("💳 Mode de paiement ?", reply_markup=InlineKeyboardMarkup(keyboard))
+        keyboard = [
+            [InlineKeyboardButton("💳 PayPal", callback_data='pay_paypal')],
+            [InlineKeyboardButton("🏦 Virement", callback_data='pay_virement')],
+            [InlineKeyboardButton("📱 Revolut", callback_data='pay_revolut')]
+        ]
+        await update.message.reply_text("Choisissez un mode de paiement 👇", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def payment_callback(update: Update, context):
     query = update.callback_query
@@ -204,7 +207,16 @@ async def payment_callback(update: Update, context):
     if not state or not isinstance(state, dict):
         return
     
-    payment = "CB" if query.data == 'pay_cb' else "Espèces"
+    # Déterminer le mode de paiement
+    if query.data == 'pay_paypal':
+        payment = "PayPal"
+    elif query.data == 'pay_virement':
+        payment = "Virement"
+    elif query.data == 'pay_revolut':
+        payment = "Revolut"
+    else:
+        payment = "Inconnu"
+    
     username = query.from_user.username or "Inconnu"
     
     # Enregistrer la commande
@@ -219,24 +231,24 @@ async def payment_callback(update: Update, context):
     
     # Confirmation client
     await query.message.reply_text(
-        f"✅ Commande #{order_id} enregistrée !\n\n"
-        f"Prix: {state['price']:.2f}€\n"
-        f"Adresse: {state['address']}\n"
-        f"Paiement: {payment}\n\n"
-        f"Nous vous contacterons bientôt !"
+        f"✅ Votre commande a bien été envoyée ! 🎉\n"
+        f"Merci pour votre confiance 🙏\n\n"
+        f"📦 Vous recevrez le lien de suivi d'ici peu 🚚💨"
     )
     
     # Notification admin
     for admin_id in ADMIN_IDS:
         try:
+            await context.bot.send_message(
+                admin_id,
+                f"📦 Nouvelle commande reçue !\n\n"
+                f"💰 Prix: {state['price']:.2f}€\n"
+                f"🏠 Adresse: {state['address']}\n"
+                f"💳 Paiement: {payment}"
+            )
             await context.bot.send_photo(
                 admin_id,
-                state['photo'],
-                caption=f"🆕 Nouvelle commande #{order_id}\n\n"
-                        f"Client: @{username}\n"
-                        f"Prix: {state['price']:.2f}€\n"
-                        f"Adresse: {state['address']}\n"
-                        f"Paiement: {payment}"
+                state['photo']
             )
         except:
             pass
