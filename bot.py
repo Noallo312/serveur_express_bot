@@ -3,6 +3,7 @@ import threading
 import sqlite3
 import csv
 import time
+import asyncio
 from datetime import datetime
 from io import StringIO
 from flask import Flask
@@ -295,9 +296,9 @@ async def handle_message(update: Update, context):
             reply_markup=reply_markup
         )
 
-# Fonction pour démarrer le bot Telegram
-def start_telegram_bot():
-    """Démarre le bot Telegram en mode polling"""
+# Fonction asynchrone pour démarrer le bot
+async def run_telegram_bot():
+    """Démarre le bot Telegram en mode polling avec event loop"""
     print("🤖 Initialisation du bot Telegram...")
     
     application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -317,16 +318,40 @@ def start_telegram_bot():
     max_retries = 5
     for attempt in range(max_retries):
         try:
-            application.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            await application.initialize()
+            await application.start()
+            await application.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            
+            # Garder le bot actif indéfiniment
+            try:
+                await asyncio.Event().wait()
+            except (KeyboardInterrupt, SystemExit):
+                pass
+            finally:
+                await application.updater.stop()
+                await application.stop()
+                await application.shutdown()
             break
         except Exception as e:
             if "Conflict" in str(e) and attempt < max_retries - 1:
                 print(f"⚠️ CONFLIT DÉTECTÉ ! Nouvelle tentative dans 10 secondes... ({attempt + 1}/{max_retries})")
-                time.sleep(10)
+                await asyncio.sleep(10)
                 force_kill_all_instances()
             else:
                 print(f"❌ Échec après {max_retries} tentatives: {e}")
                 raise
+
+# Fonction pour démarrer le bot dans un thread avec event loop
+def start_telegram_bot():
+    """Démarre le bot dans un nouveau event loop"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_telegram_bot())
+    except Exception as e:
+        print(f"❌ Erreur bot Telegram: {e}")
+    finally:
+        loop.close()
 
 # Démarrer le bot dans un thread daemon
 print("🚀 Lancement du bot Telegram en arrière-plan...")
