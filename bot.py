@@ -12,11 +12,22 @@ import requests
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 6193535472]  # Vos IDs admin
+ADMIN_IDS = [6976573567, 6193535472]
+
+# Flask app (doit être défini en premier pour Gunicorn)
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot Telegram actif !"
+
+@app.route('/health')
+def health():
+    return "OK", 200
 
 # Base de données
 def init_db():
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS orders
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -40,13 +51,11 @@ def force_kill_all_instances():
     print("🔥 Forçage de la suppression de toutes les instances...")
     
     try:
-        # 1. Supprimer le webhook avec drop_pending_updates
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
         response = requests.get(url, timeout=10)
         print(f"🔧 Webhook supprimé: {response.json()}")
         time.sleep(2)
         
-        # 2. Faire plusieurs appels getUpdates pour forcer la déconnexion des autres instances
         print("⚡ Forçage de déconnexion des autres instances...")
         for i in range(5):
             try:
@@ -58,7 +67,7 @@ def force_kill_all_instances():
                 pass
         
         print("✅ Toutes les instances ont été forcées à se déconnecter")
-        time.sleep(3)  # Attendre que tout se stabilise
+        time.sleep(3)
         
     except Exception as e:
         print(f"⚠️ Erreur pendant le nettoyage: {e}")
@@ -80,7 +89,7 @@ async def stats(update: Update, context):
         await update.message.reply_text("⛔ Accès refusé.")
         return
     
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
     c.execute("SELECT COUNT(DISTINCT user_id) FROM orders")
@@ -92,7 +101,7 @@ async def stats(update: Update, context):
     c.execute("SELECT SUM(price) FROM orders")
     total_revenue = c.fetchone()[0] or 0
     
-    profit = total_orders * 5  # 5€ par commande
+    profit = total_orders * 5
     
     conn.close()
     
@@ -111,7 +120,7 @@ async def historique(update: Update, context):
         await update.message.reply_text("⛔ Accès refusé.")
         return
     
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 10")
     orders = c.fetchall()
@@ -140,7 +149,7 @@ async def export(update: Update, context):
         await update.message.reply_text("⛔ Accès refusé.")
         return
     
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT * FROM orders")
     orders = c.fetchall()
@@ -173,7 +182,7 @@ async def broadcast(update: Update, context):
     
     message = ' '.join(context.args)
     
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute("SELECT DISTINCT user_id FROM orders")
     users = c.fetchall()
@@ -208,8 +217,7 @@ async def button_callback(update: Update, context):
             }
             state['payment_method'] = payment_methods[query.data]
             
-            # Enregistrer dans la base
-            conn = sqlite3.connect('orders.db')
+            conn = sqlite3.connect('orders.db', check_same_thread=False)
             c = conn.cursor()
             c.execute("""INSERT INTO orders (user_id, username, photo_id, price, address, payment_method, timestamp)
                          VALUES (?, ?, ?, ?, ?, ?, ?)""",
@@ -223,13 +231,11 @@ async def button_callback(update: Update, context):
             conn.commit()
             conn.close()
             
-            # Confirmation au client
             await query.message.reply_text(
                 "✅ Votre commande a bien été envoyée ! 🎉\n\n"
                 "📦 Vous recevrez le lien de suivi d'ici peu 🚚💨"
             )
             
-            # Notification aux admins
             admin_message = (
                 f"🔔 **Nouvelle commande !**\n\n"
                 f"👤 Client : @{query.from_user.username or 'Unknown'} (ID: {query.from_user.id})\n"
@@ -245,7 +251,6 @@ async def button_callback(update: Update, context):
                 except:
                     pass
             
-            # Réinitialiser l'état
             del user_states[query.from_user.id]
 
 # Gestion des messages
@@ -290,28 +295,13 @@ async def handle_message(update: Update, context):
             reply_markup=reply_markup
         )
 
-# Flask pour garder le service actif
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    return "Bot Telegram actif !"
-
-def run_flask():
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
-
-# Démarrage du bot
-if __name__ == '__main__':
-    # Démarrer Flask en arrière-plan
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    print("🌐 Flask démarré")
+# Fonction pour démarrer le bot Telegram
+def start_telegram_bot():
+    """Démarre le bot Telegram en mode polling"""
+    print("🤖 Initialisation du bot Telegram...")
     
-    # Créer l'application
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # Ajouter les handlers
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('stats', stats))
     application.add_handler(CommandHandler('historique', historique))
@@ -320,12 +310,10 @@ if __name__ == '__main__':
     application.add_handler(CallbackQueryHandler(button_callback))
     application.add_handler(MessageHandler(filters.ALL, handle_message))
     
-    # Forcer la suppression de toutes les instances
     force_kill_all_instances()
     
     print("🤖 Bot Telegram démarré en mode POLLING...")
     
-    # Démarrer le bot avec retry agressif sur conflit
     max_retries = 5
     for attempt in range(max_retries):
         try:
@@ -335,7 +323,18 @@ if __name__ == '__main__':
             if "Conflict" in str(e) and attempt < max_retries - 1:
                 print(f"⚠️ CONFLIT DÉTECTÉ ! Nouvelle tentative dans 10 secondes... ({attempt + 1}/{max_retries})")
                 time.sleep(10)
-                force_kill_all_instances()  # Re-forcer le nettoyage
+                force_kill_all_instances()
             else:
-                print(f"❌ Échec après {max_retries} tentatives")
+                print(f"❌ Échec après {max_retries} tentatives: {e}")
                 raise
+
+# Démarrer le bot dans un thread daemon
+print("🚀 Lancement du bot Telegram en arrière-plan...")
+bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
+bot_thread.start()
+print("🌐 Flask prêt pour Gunicorn")
+
+# Point d'entrée pour le mode développement
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
