@@ -232,11 +232,11 @@ async def button_callback(update: Update, context):
     # Choix du service
     if query.data == 'service_ubereats':
         user_states[query.from_user.id] = {'state': 'waiting_photo', 'service': 'Uber Eats'}
-        await query.message.reply_text("🍔 **Uber Eats sélectionné**\n\n📸 Envoyez la photo de votre article :")
+        await query.message.reply_text("📸 Envoyez la photo de votre article :")
     
     elif query.data == 'service_deezer':
         user_states[query.from_user.id] = {'state': 'waiting_firstname', 'service': 'Deezer'}
-        await query.message.reply_text("🎵 **Deezer sélectionné**\n\n📝 Entrez votre prénom :")
+        await query.message.reply_text("📝 Entrez votre prénom :")
     
     # Choix du paiement (Uber Eats)
     elif query.data in ['paypal', 'virement', 'revolut']:
