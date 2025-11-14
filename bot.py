@@ -41,7 +41,30 @@ def init_db():
                   first_name TEXT,
                   last_name TEXT,
                   payment_method TEXT,
-                  timestamp TEXT)''')
+                  timestamp TEXT,
+                  status TEXT DEFAULT 'en_attente',
+                  admin_id INTEGER,
+                  admin_username TEXT,
+                  taken_at TEXT)''')
+    
+    # Ajouter les colonnes si elles n'existent pas (pour migration)
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'en_attente'")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN admin_id INTEGER")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN admin_username TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN taken_at TEXT")
+    except:
+        pass
+    
     conn.commit()
     conn.close()
 
@@ -114,6 +137,15 @@ async def stats(update: Update, context):
     c.execute("SELECT COUNT(*) FROM orders WHERE service='Deezer'")
     deezer_orders = c.fetchone()[0]
     
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
+    pending_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_cours'")
+    in_progress_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
+    completed_orders = c.fetchone()[0]
+    
     profit = total_orders * 5
     
     conn.close()
@@ -123,11 +155,125 @@ async def stats(update: Update, context):
         f"👥 Nombre de clients : {total_clients}\n"
         f"📦 Nombre de commandes : {total_orders}\n"
         f"🍔 Uber Eats : {ubereats_orders}\n"
-        f"🎵 Deezer : {deezer_orders}\n"
+        f"🎵 Deezer : {deezer_orders}\n\n"
+        f"📋 Statuts :\n"
+        f"⏳ En attente : {pending_orders}\n"
+        f"🔄 En cours : {in_progress_orders}\n"
+        f"✅ Terminées : {completed_orders}\n\n"
         f"💰 Chiffre d'affaires : {total_revenue:.2f}€\n"
         f"💵 Bénéfices (5€/commande) : {profit:.2f}€",
         parse_mode='Markdown'
     )
+
+# Commande /encours (admin) - voir commandes en attente
+async def encours(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Accès refusé.")
+        return
+    
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""SELECT id, user_id, username, service, price, address, first_name, last_name, 
+                        payment_method, timestamp, status, admin_username 
+                 FROM orders 
+                 WHERE status IN ('en_attente', 'en_cours')
+                 ORDER BY id DESC""")
+    orders = c.fetchall()
+    conn.close()
+    
+    if not orders:
+        await update.message.reply_text("✅ Aucune commande en attente ou en cours.")
+        return
+    
+    message = "📋 **Commandes en attente/cours :**\n\n"
+    for order in orders:
+        status_emoji = "⏳" if order[10] == "en_attente" else "🔄"
+        admin_info = f"\n👨‍💼 Pris par : @{order[11]}" if order[11] else ""
+        
+        if order[3] == 'Uber Eats':
+            message += (
+                f"{status_emoji} **#{order[0]}**\n"
+                f"🍔 Uber Eats\n"
+                f"👤 @{order[2]} (ID: {order[1]})\n"
+                f"💰 {order[4]}€\n"
+                f"📍 {order[5]}\n"
+                f"💳 {order[8]}{admin_info}\n"
+                f"🕐 {order[9]}\n\n"
+            )
+        else:
+            message += (
+                f"{status_emoji} **#{order[0]}**\n"
+                f"🎵 Deezer\n"
+                f"👤 @{order[2]} (ID: {order[1]})\n"
+                f"📝 {order[6]} {order[7]}\n"
+                f"💳 {order[8]}{admin_info}\n"
+                f"🕐 {order[9]}\n\n"
+            )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+# Commande /disponibles (admin) - voir uniquement les commandes disponibles
+async def disponibles(update: Update, context):
+    if update.effective_user.id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Accès refusé.")
+        return
+    
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("""SELECT id, user_id, username, service, photo_id, price, address, first_name, last_name, 
+                        payment_method, timestamp 
+                 FROM orders 
+                 WHERE status='en_attente'
+                 ORDER BY id DESC""")
+    orders = c.fetchall()
+    conn.close()
+    
+    if not orders:
+        await update.message.reply_text("✅ Aucune commande disponible pour le moment.")
+        return
+    
+    await update.message.reply_text(f"🛒 **{len(orders)} commande(s) disponible(s) :**\n")
+    
+    for order in orders:
+        if order[3] == 'Uber Eats':
+            message = (
+                f"⏳ **Commande #{order[0]} - Uber Eats**\n\n"
+                f"👤 Client : @{order[2]} (ID: {order[1]})\n"
+                f"💰 Prix : {order[5]}€\n"
+                f"📍 Adresse : {order[6]}\n"
+                f"💳 Paiement : {order[9]}\n"
+                f"🕐 {order[10]}"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order[0]}')],
+                [InlineKeyboardButton("✅ Terminer directement", callback_data=f'complete_order_{order[0]}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            if order[4]:  # Si photo existe
+                try:
+                    await update.message.reply_photo(photo=order[4])
+                except:
+                    pass
+        
+        else:  # Deezer
+            message = (
+                f"⏳ **Commande #{order[0]} - Deezer**\n\n"
+                f"👤 Client : @{order[2]} (ID: {order[1]})\n"
+                f"📝 Nom : {order[7]} {order[8]}\n"
+                f"💳 Paiement : {order[9]}\n"
+                f"🕐 {order[10]}"
+            )
+            
+            keyboard = [
+                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order[0]}')],
+                [InlineKeyboardButton("✅ Terminer directement", callback_data=f'complete_order_{order[0]}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
 
 # Commande /historique (admin)
 async def historique(update: Update, context):
@@ -137,7 +283,10 @@ async def historique(update: Update, context):
     
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 10")
+    c.execute("""SELECT id, user_id, username, service, price, address, first_name, last_name, 
+                        payment_method, timestamp, status, admin_username 
+                 FROM orders 
+                 ORDER BY id DESC LIMIT 10""")
     orders = c.fetchall()
     conn.close()
     
@@ -147,24 +296,32 @@ async def historique(update: Update, context):
     
     message = "📜 **10 dernières commandes :**\n\n"
     for order in orders:
+        status_map = {
+            "en_attente": "⏳ En attente",
+            "en_cours": "🔄 En cours",
+            "terminee": "✅ Terminée"
+        }
+        status_text = status_map.get(order[10], order[10])
+        admin_info = f" (@{order[11]})" if order[11] else ""
+        
         if order[3] == 'Uber Eats':
             message += (
-                f"🆔 #{order[0]}\n"
-                f"🍔 Service : {order[3]}\n"
+                f"🆔 #{order[0]} - {status_text}{admin_info}\n"
+                f"🍔 Uber Eats\n"
                 f"👤 @{order[2]} (ID: {order[1]})\n"
-                f"💰 Prix : {order[5]}€\n"
-                f"📍 Adresse : {order[6]}\n"
-                f"💳 Paiement : {order[9]}\n"
-                f"🕐 {order[10]}\n\n"
+                f"💰 {order[4]}€\n"
+                f"📍 {order[5]}\n"
+                f"💳 {order[8]}\n"
+                f"🕐 {order[9]}\n\n"
             )
-        else:  # Deezer
+        else:
             message += (
-                f"🆔 #{order[0]}\n"
-                f"🎵 Service : {order[3]}\n"
+                f"🆔 #{order[0]} - {status_text}{admin_info}\n"
+                f"🎵 Deezer\n"
                 f"👤 @{order[2]} (ID: {order[1]})\n"
-                f"📝 Nom : {order[7]} {order[8]}\n"
-                f"💳 Paiement : {order[9]}\n"
-                f"🕐 {order[10]}\n\n"
+                f"📝 {order[6]} {order[7]}\n"
+                f"💳 {order[8]}\n"
+                f"🕐 {order[9]}\n\n"
             )
     
     await update.message.reply_text(message, parse_mode='Markdown')
@@ -187,7 +344,8 @@ async def export(update: Update, context):
     
     output = StringIO()
     writer = csv.writer(output)
-    writer.writerow(['ID', 'User ID', 'Username', 'Service', 'Photo ID', 'Prix', 'Adresse', 'Prénom', 'Nom', 'Paiement', 'Date'])
+    writer.writerow(['ID', 'User ID', 'Username', 'Service', 'Photo ID', 'Prix', 'Adresse', 
+                     'Prénom', 'Nom', 'Paiement', 'Date', 'Status', 'Admin ID', 'Admin Username', 'Taken At'])
     writer.writerows(orders)
     
     output.seek(0)
@@ -238,6 +396,141 @@ async def button_callback(update: Update, context):
         user_states[query.from_user.id] = {'state': 'waiting_firstname', 'service': 'Deezer'}
         await query.message.reply_text("📝 Entrez votre prénom :")
     
+    # Admin prend en charge une commande
+    elif query.data.startswith('take_order_'):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.answer("⛔ Accès refusé.", show_alert=True)
+            return
+        
+        order_id = int(query.data.split('_')[2])
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT status, admin_username FROM orders WHERE id=?", (order_id,))
+        result = c.fetchone()
+        
+        if not result:
+            await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[0] == 'en_cours':
+            await query.answer(f"⚠️ Déjà prise en charge par @{result[1]}", show_alert=True)
+            conn.close()
+            return
+        
+        c.execute("""UPDATE orders 
+                     SET status='en_cours', admin_id=?, admin_username=?, taken_at=?
+                     WHERE id=?""",
+                  (query.from_user.id, query.from_user.username or str(query.from_user.id),
+                   datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
+        conn.commit()
+        conn.close()
+        
+        # Modifier les boutons pour afficher "Terminer" et "Remettre en ligne"
+        keyboard = [
+            [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')],
+            [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'release_order_{order_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                query.message.text + f"\n\n🔄 **En cours par @{query.from_user.username or query.from_user.id}**",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except:
+            pass
+        
+        await query.answer(f"✅ Commande #{order_id} prise en charge !", show_alert=True)
+    
+    # Admin termine une commande
+    elif query.data.startswith('complete_order_'):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.answer("⛔ Accès refusé.", show_alert=True)
+            return
+        
+        order_id = int(query.data.split('_')[2])
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT admin_id FROM orders WHERE id=?", (order_id,))
+        result = c.fetchone()
+        
+        if not result:
+            await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        # Vérifier que c'est bien l'admin qui a pris la commande
+        if result[0] != query.from_user.id:
+            await query.answer("⚠️ Seul l'admin en charge peut terminer cette commande.", show_alert=True)
+            conn.close()
+            return
+        
+        c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
+        conn.commit()
+        conn.close()
+        
+        try:
+            await query.edit_message_text(
+                query.message.text.split('\n\n🔄')[0] + f"\n\n✅ **Terminée par @{query.from_user.username or query.from_user.id}**",
+                parse_mode='Markdown'
+            )
+        except:
+            pass
+        
+        await query.answer(f"✅ Commande #{order_id} marquée comme terminée !", show_alert=True)
+    
+    # Admin remet une commande en ligne
+    elif query.data.startswith('release_order_'):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.answer("⛔ Accès refusé.", show_alert=True)
+            return
+        
+        order_id = int(query.data.split('_')[2])
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT admin_id FROM orders WHERE id=?", (order_id,))
+        result = c.fetchone()
+        
+        if not result:
+            await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        # Vérifier que c'est bien l'admin qui a pris la commande
+        if result[0] != query.from_user.id:
+            await query.answer("⚠️ Seul l'admin en charge peut remettre cette commande en ligne.", show_alert=True)
+            conn.close()
+            return
+        
+        c.execute("""UPDATE orders 
+                     SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL
+                     WHERE id=?""", (order_id,))
+        conn.commit()
+        conn.close()
+        
+        # Remettre les boutons d'origine
+        keyboard = [
+            [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
+            [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                query.message.text.split('\n\n🔄')[0] + f"\n\n🔄 **Remise en ligne par @{query.from_user.username or query.from_user.id}**",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except:
+            pass
+        
+        await query.answer(f"🔄 Commande #{order_id} remise en ligne !", show_alert=True)
+    
     # Choix du paiement (Uber Eats)
     elif query.data in ['paypal', 'virement', 'revolut']:
         state = user_states.get(query.from_user.id)
@@ -251,8 +544,8 @@ async def button_callback(update: Update, context):
             
             conn = sqlite3.connect('orders.db', check_same_thread=False)
             c = conn.cursor()
-            c.execute("""INSERT INTO orders (user_id, username, service, photo_id, price, address, first_name, last_name, payment_method, timestamp)
-                         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)""",
+            c.execute("""INSERT INTO orders (user_id, username, service, photo_id, price, address, first_name, last_name, payment_method, timestamp, status)
+                         VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, 'en_attente')""",
                       (query.from_user.id,
                        query.from_user.username or 'Unknown',
                        state['service'],
@@ -261,6 +554,7 @@ async def button_callback(update: Update, context):
                        state['address'],
                        state['payment_method'],
                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            order_id = c.lastrowid
             conn.commit()
             conn.close()
             
@@ -270,7 +564,7 @@ async def button_callback(update: Update, context):
             )
             
             admin_message = (
-                f"🔔 **Nouvelle commande !**\n\n"
+                f"🔔 **Nouvelle commande #{order_id}**\n\n"
                 f"🍔 Service : Uber Eats\n"
                 f"👤 Client : @{query.from_user.username or 'Unknown'} (ID: {query.from_user.id})\n"
                 f"💰 Prix : {state['price']}€\n"
@@ -278,9 +572,15 @@ async def button_callback(update: Update, context):
                 f"💳 Paiement : {state['payment_method']}\n"
             )
             
+            keyboard = [
+                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             for admin_id in ADMIN_IDS:
                 try:
-                    await context.bot.send_message(chat_id=admin_id, text=admin_message, parse_mode='Markdown')
+                    await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                                                   parse_mode='Markdown', reply_markup=reply_markup)
                     await context.bot.send_photo(chat_id=admin_id, photo=state['photo_id'])
                 except:
                     pass
@@ -295,8 +595,8 @@ async def button_callback(update: Update, context):
             
             conn = sqlite3.connect('orders.db', check_same_thread=False)
             c = conn.cursor()
-            c.execute("""INSERT INTO orders (user_id, username, service, photo_id, price, address, first_name, last_name, payment_method, timestamp)
-                         VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?)""",
+            c.execute("""INSERT INTO orders (user_id, username, service, photo_id, price, address, first_name, last_name, payment_method, timestamp, status)
+                         VALUES (?, ?, ?, NULL, NULL, NULL, ?, ?, ?, ?, 'en_attente')""",
                       (query.from_user.id,
                        query.from_user.username or 'Unknown',
                        state['service'],
@@ -304,6 +604,7 @@ async def button_callback(update: Update, context):
                        state['last_name'],
                        state['payment_method'],
                        datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            order_id = c.lastrowid
             conn.commit()
             conn.close()
             
@@ -313,16 +614,23 @@ async def button_callback(update: Update, context):
             )
             
             admin_message = (
-                f"🔔 **Nouvelle commande !**\n\n"
+                f"🔔 **Nouvelle commande #{order_id}**\n\n"
                 f"🎵 Service : Deezer\n"
                 f"👤 Client : @{query.from_user.username or 'Unknown'} (ID: {query.from_user.id})\n"
                 f"📝 Nom : {state['first_name']} {state['last_name']}\n"
                 f"💳 Paiement : {state['payment_method']}\n"
             )
             
+            keyboard = [
+                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
+                [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
             for admin_id in ADMIN_IDS:
                 try:
-                    await context.bot.send_message(chat_id=admin_id, text=admin_message, parse_mode='Markdown')
+                    await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                                                   parse_mode='Markdown', reply_markup=reply_markup)
                 except:
                     pass
             
@@ -400,6 +708,8 @@ async def run_telegram_bot():
     
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('stats', stats))
+    application.add_handler(CommandHandler('encours', encours))
+    application.add_handler(CommandHandler('disponibles', disponibles))
     application.add_handler(CommandHandler('historique', historique))
     application.add_handler(CommandHandler('export', export))
     application.add_handler(CommandHandler('broadcast', broadcast))
