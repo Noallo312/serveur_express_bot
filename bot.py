@@ -78,27 +78,37 @@ def force_kill_all_instances():
     print("🔥 Forçage de la suppression de toutes les instances...")
     
     try:
+        # Supprimer le webhook ET les mises à jour en attente
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
         response = requests.get(url, timeout=10)
         print(f"🔧 Webhook supprimé: {response.json()}")
-        time.sleep(2)
+        time.sleep(3)
         
-        print("⚡ Forçage de déconnexion des autres instances...")
-        for i in range(5):
+        # Forcer la lecture de TOUTES les mises à jour en attente
+        print("⚡ Vidage des mises à jour en attente...")
+        for i in range(10):
             try:
                 url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1&timeout=1"
-                requests.get(url2, timeout=3)
-                print(f"   Tentative {i+1}/5...")
+                resp = requests.get(url2, timeout=5)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if data.get('result'):
+                        # Obtenir le dernier update_id et le confirmer
+                        last_id = max([u['update_id'] for u in data['result']])
+                        url3 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_id+1}&timeout=1"
+                        requests.get(url3, timeout=5)
+                print(f"   Nettoyage {i+1}/10...")
                 time.sleep(1)
-            except:
+            except Exception as e:
+                print(f"   Erreur nettoyage: {e}")
                 pass
         
         print("✅ Toutes les instances ont été forcées à se déconnecter")
-        time.sleep(3)
+        time.sleep(5)
         
     except Exception as e:
         print(f"⚠️ Erreur pendant le nettoyage: {e}")
-        time.sleep(2)
+        time.sleep(3)
 
 # Commande /start
 async def start(update: Update, context):
@@ -109,9 +119,50 @@ async def start(update: Update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "👋 Bonjour ! Bienvenue sur Serveur Express Bot\n\n"
-        "🎯 Choisissez le service que vous souhaitez :",
+        "🎯 Choisissez le service que vous souhaitez :\n\n"
+        "💡 Tapez /help pour voir toutes les commandes disponibles",
         reply_markup=reply_markup
     )
+
+# Commande /help
+async def help_command(update: Update, context):
+    user_id = update.effective_user.id
+    is_admin = user_id in ADMIN_IDS
+    
+    if is_admin:
+        message = (
+            "📋 **COMMANDES DISPONIBLES**\n\n"
+            "👤 **Commandes utilisateur :**\n"
+            "/start - Démarrer le bot et passer une commande\n"
+            "/help - Afficher cette aide\n\n"
+            "👨‍💼 **Commandes administrateur :**\n"
+            "/stats - Afficher les statistiques complètes\n"
+            "/disponibles - Voir les commandes disponibles à prendre\n"
+            "/encours - Voir les commandes en attente/en cours\n"
+            "/historique - Voir les 10 dernières commandes\n"
+            "/export - Exporter toutes les commandes en CSV\n"
+            "/broadcast [message] - Envoyer un message à tous les clients\n\n"
+            "🔔 **Fonctionnalités :**\n"
+            "• Commandes Uber Eats (20-23€)\n"
+            "• Comptes Deezer Premium\n"
+            "• Suivi en temps réel\n"
+            "• Paiement : PayPal, Virement, Revolut"
+        )
+    else:
+        message = (
+            "📋 **COMMANDES DISPONIBLES**\n\n"
+            "/start - Démarrer le bot et passer une commande\n"
+            "/help - Afficher cette aide\n\n"
+            "🍔 **Uber Eats** - Commandes de 20€ à 23€\n"
+            "🎵 **Deezer** - Comptes Premium\n\n"
+            "💳 **Modes de paiement :**\n"
+            "• PayPal\n"
+            "• Virement bancaire\n"
+            "• Revolut\n\n"
+            "📦 Vous recevrez votre commande rapidement !"
+        )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
 
 # Commande /stats (admin)
 async def stats(update: Update, context):
@@ -464,7 +515,7 @@ async def button_callback(update: Update, context):
             return
         
         # Vérifier que c'est bien l'admin qui a pris la commande
-        if result[0] != query.from_user.id:
+        if result[0] and result[0] != query.from_user.id:
             await query.answer("⚠️ Seul l'admin en charge peut terminer cette commande.", show_alert=True)
             conn.close()
             return
@@ -587,11 +638,16 @@ async def button_callback(update: Update, context):
             
             del user_states[query.from_user.id]
     
-    # Confirmation PayPal (Deezer)
-    elif query.data == 'paypal_deezer':
+    # Choix du paiement (Deezer)
+    elif query.data in ['paypal_deezer', 'virement_deezer', 'revolut_deezer']:
         state = user_states.get(query.from_user.id)
         if state and state.get('service') == 'Deezer' and state['state'] == 'waiting_payment_deezer':
-            state['payment_method'] = '💳 PayPal'
+            payment_methods = {
+                'paypal_deezer': '💳 PayPal',
+                'virement_deezer': '🏦 Virement',
+                'revolut_deezer': '📱 Revolut'
+            }
+            state['payment_method'] = payment_methods[query.data]
             
             conn = sqlite3.connect('orders.db', check_same_thread=False)
             c = conn.cursor()
@@ -690,12 +746,16 @@ async def handle_message(update: Update, context):
         elif state['state'] == 'waiting_lastname':
             state['last_name'] = update.message.text.strip()
             state['state'] = 'waiting_payment_deezer'
-            keyboard = [[InlineKeyboardButton("💳 PayPal", callback_data='paypal_deezer')]]
+            keyboard = [
+                [InlineKeyboardButton("💳 PayPal", callback_data='paypal_deezer')],
+                [InlineKeyboardButton("🏦 Virement", callback_data='virement_deezer')],
+                [InlineKeyboardButton("📱 Revolut", callback_data='revolut_deezer')]
+            ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await update.message.reply_text(
                 f"✅ Informations enregistrées :\n"
                 f"📝 {state['first_name']} {state['last_name']}\n\n"
-                f"💳 Cliquez pour confirmer le paiement PayPal :",
+                f"💳 Choisissez votre mode de paiement :",
                 reply_markup=reply_markup
             )
 
@@ -706,7 +766,9 @@ async def run_telegram_bot():
     
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
+    # Enregistrer toutes les commandes
     application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('help', help_command))
     application.add_handler(CommandHandler('stats', stats))
     application.add_handler(CommandHandler('encours', encours))
     application.add_handler(CommandHandler('disponibles', disponibles))
@@ -720,30 +782,64 @@ async def run_telegram_bot():
     
     print("🤖 Bot Telegram démarré en mode POLLING...")
     
-    max_retries = 5
+    max_retries = 3
+    retry_delay = 15
+    
     for attempt in range(max_retries):
         try:
+            print(f"🔄 Tentative de connexion {attempt + 1}/{max_retries}...")
+            
             await application.initialize()
             await application.start()
-            await application.updater.start_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+            
+            # Configuration du polling avec paramètres optimisés
+            await application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+                poll_interval=1.0,
+                timeout=10,
+                bootstrap_retries=-1,
+                read_timeout=10,
+                write_timeout=10,
+                connect_timeout=10,
+                pool_timeout=10
+            )
+            
+            print("✅ Bot Telegram connecté avec succès!")
             
             try:
                 await asyncio.Event().wait()
             except (KeyboardInterrupt, SystemExit):
-                pass
+                print("🛑 Arrêt du bot...")
             finally:
+                print("🔄 Nettoyage en cours...")
                 await application.updater.stop()
                 await application.stop()
                 await application.shutdown()
+                print("✅ Bot arrêté proprement")
             break
+            
         except Exception as e:
-            if "Conflict" in str(e) and attempt < max_retries - 1:
-                print(f"⚠️ CONFLIT DÉTECTÉ ! Nouvelle tentative dans 10 secondes... ({attempt + 1}/{max_retries})")
-                await asyncio.sleep(10)
-                force_kill_all_instances()
+            error_msg = str(e)
+            if "Conflict" in error_msg:
+                print(f"⚠️ CONFLIT DÉTECTÉ (tentative {attempt + 1}/{max_retries})")
+                print(f"   Une autre instance du bot est probablement active.")
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ Attente de {retry_delay} secondes avant nouvelle tentative...")
+                    await asyncio.sleep(retry_delay)
+                    print(f"   🔥 Nettoyage forcé des instances...")
+                    force_kill_all_instances()
+                else:
+                    print("❌ Échec après toutes les tentatives.")
+                    print("💡 SOLUTION : Arrêtez toutes les autres instances du bot (Render, local, etc.)")
+                    raise
             else:
-                print(f"❌ Échec après {max_retries} tentatives: {e}")
-                raise
+                print(f"❌ Erreur inattendue: {error_msg}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(5)
+                else:
+                    raise
 
 def start_telegram_bot():
     """Démarre le bot dans un nouveau event loop"""
