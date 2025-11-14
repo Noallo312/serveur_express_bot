@@ -13,7 +13,7 @@ import requests
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 6193535472]
+ADMIN_IDS = [6976573567, 6193535472, 5174507979]
 
 # Flask app (doit être défini en premier pour Gunicorn)
 app = Flask(__name__)
