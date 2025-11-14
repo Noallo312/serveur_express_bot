@@ -45,7 +45,10 @@ def init_db():
                   status TEXT DEFAULT 'en_attente',
                   admin_id INTEGER,
                   admin_username TEXT,
-                  taken_at TEXT)''')
+                  taken_at TEXT,
+                  cancelled_by INTEGER,
+                  cancelled_at TEXT,
+                  cancel_reason TEXT)''')
     
     # Ajouter les colonnes si elles n'existent pas (pour migration)
     try:
@@ -62,6 +65,18 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE orders ADD COLUMN taken_at TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN cancelled_by INTEGER")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE orders ADD COLUMN cancel_reason TEXT")
     except:
         pass
     
@@ -119,48 +134,33 @@ async def start(update: Update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
         "👋 Bonjour ! Bienvenue sur Serveur Express Bot\n\n"
-        "🎯 Choisissez le service que vous souhaitez :\n\n"
-        "💡 Tapez /help pour voir toutes les commandes disponibles",
+        "🎯 Choisissez le service que vous souhaitez :",
         reply_markup=reply_markup
     )
 
-# Commande /help
+# Commande /help (admin uniquement)
 async def help_command(update: Update, context):
     user_id = update.effective_user.id
-    is_admin = user_id in ADMIN_IDS
     
-    if is_admin:
-        message = (
-            "📋 **COMMANDES DISPONIBLES**\n\n"
-            "👤 **Commandes utilisateur :**\n"
-            "/start - Démarrer le bot et passer une commande\n"
-            "/help - Afficher cette aide\n\n"
-            "👨‍💼 **Commandes administrateur :**\n"
-            "/stats - Afficher les statistiques complètes\n"
-            "/disponibles - Voir les commandes disponibles à prendre\n"
-            "/encours - Voir les commandes en attente/en cours\n"
-            "/historique - Voir les 10 dernières commandes\n"
-            "/export - Exporter toutes les commandes en CSV\n"
-            "/broadcast [message] - Envoyer un message à tous les clients\n\n"
-            "🔔 **Fonctionnalités :**\n"
-            "• Commandes Uber Eats (20-23€)\n"
-            "• Comptes Deezer Premium\n"
-            "• Suivi en temps réel\n"
-            "• Paiement : PayPal, Virement, Revolut"
-        )
-    else:
-        message = (
-            "📋 **COMMANDES DISPONIBLES**\n\n"
-            "/start - Démarrer le bot et passer une commande\n"
-            "/help - Afficher cette aide\n\n"
-            "🍔 **Uber Eats** - Commandes de 20€ à 23€\n"
-            "🎵 **Deezer** - Comptes Premium\n\n"
-            "💳 **Modes de paiement :**\n"
-            "• PayPal\n"
-            "• Virement bancaire\n"
-            "• Revolut\n\n"
-            "📦 Vous recevrez votre commande rapidement !"
-        )
+    if user_id not in ADMIN_IDS:
+        await update.message.reply_text("⛔ Cette commande est réservée aux administrateurs.")
+        return
+    
+    message = (
+        "📋 **COMMANDES ADMINISTRATEUR**\n\n"
+        "/stats - Afficher les statistiques complètes\n"
+        "/disponibles - Voir les commandes disponibles à prendre\n"
+        "/encours - Voir les commandes en attente/en cours\n"
+        "/historique - Voir les 10 dernières commandes\n"
+        "/export - Exporter toutes les commandes en CSV\n"
+        "/broadcast [message] - Envoyer un message à tous les clients\n\n"
+        "🔔 **Fonctionnalités :**\n"
+        "• Commandes Uber Eats (20-23€) - 5€ de bénéfice\n"
+        "• Comptes Deezer Premium - 6€ de bénéfice\n"
+        "• Suivi en temps réel\n"
+        "• Possibilité d'annuler les commandes\n"
+        "• Paiement : PayPal, Virement, Revolut"
+    )
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
@@ -176,16 +176,16 @@ async def stats(update: Update, context):
     c.execute("SELECT COUNT(DISTINCT user_id) FROM orders")
     total_clients = c.fetchone()[0]
     
-    c.execute("SELECT COUNT(*) FROM orders")
+    c.execute("SELECT COUNT(*) FROM orders WHERE status != 'annulee'")
     total_orders = c.fetchone()[0]
     
-    c.execute("SELECT SUM(price) FROM orders WHERE price IS NOT NULL")
+    c.execute("SELECT SUM(price) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
     total_revenue = c.fetchone()[0] or 0
     
-    c.execute("SELECT COUNT(*) FROM orders WHERE service='Uber Eats'")
+    c.execute("SELECT COUNT(*) FROM orders WHERE service='Uber Eats' AND status != 'annulee'")
     ubereats_orders = c.fetchone()[0]
     
-    c.execute("SELECT COUNT(*) FROM orders WHERE service='Deezer'")
+    c.execute("SELECT COUNT(*) FROM orders WHERE service='Deezer' AND status != 'annulee'")
     deezer_orders = c.fetchone()[0]
     
     c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
@@ -197,7 +197,11 @@ async def stats(update: Update, context):
     c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
     completed_orders = c.fetchone()[0]
     
-    profit = total_orders * 5
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='annulee'")
+    cancelled_orders = c.fetchone()[0]
+    
+    # Calcul des bénéfices : 5€ pour Uber Eats, 6€ pour Deezer
+    profit = (ubereats_orders * 5) + (deezer_orders * 6)
     
     conn.close()
     
@@ -205,14 +209,15 @@ async def stats(update: Update, context):
         f"📊 **Statistiques Serveur Express**\n\n"
         f"👥 Nombre de clients : {total_clients}\n"
         f"📦 Nombre de commandes : {total_orders}\n"
-        f"🍔 Uber Eats : {ubereats_orders}\n"
-        f"🎵 Deezer : {deezer_orders}\n\n"
+        f"🍔 Uber Eats : {ubereats_orders} (5€/commande)\n"
+        f"🎵 Deezer : {deezer_orders} (6€/commande)\n\n"
         f"📋 Statuts :\n"
         f"⏳ En attente : {pending_orders}\n"
         f"🔄 En cours : {in_progress_orders}\n"
-        f"✅ Terminées : {completed_orders}\n\n"
+        f"✅ Terminées : {completed_orders}\n"
+        f"❌ Annulées : {cancelled_orders}\n\n"
         f"💰 Chiffre d'affaires : {total_revenue:.2f}€\n"
-        f"💵 Bénéfices (5€/commande) : {profit:.2f}€",
+        f"💵 Bénéfices totaux : {profit:.2f}€",
         parse_mode='Markdown'
     )
 
@@ -298,7 +303,7 @@ async def disponibles(update: Update, context):
             
             keyboard = [
                 [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order[0]}')],
-                [InlineKeyboardButton("✅ Terminer directement", callback_data=f'complete_order_{order[0]}')]
+                [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order[0]}')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -320,7 +325,7 @@ async def disponibles(update: Update, context):
             
             keyboard = [
                 [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order[0]}')],
-                [InlineKeyboardButton("✅ Terminer directement", callback_data=f'complete_order_{order[0]}')]
+                [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order[0]}')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -350,7 +355,8 @@ async def historique(update: Update, context):
         status_map = {
             "en_attente": "⏳ En attente",
             "en_cours": "🔄 En cours",
-            "terminee": "✅ Terminée"
+            "terminee": "✅ Terminée",
+            "annulee": "❌ Annulée"
         }
         status_text = status_map.get(order[10], order[10])
         admin_info = f" (@{order[11]})" if order[11] else ""
@@ -396,7 +402,8 @@ async def export(update: Update, context):
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(['ID', 'User ID', 'Username', 'Service', 'Photo ID', 'Prix', 'Adresse', 
-                     'Prénom', 'Nom', 'Paiement', 'Date', 'Status', 'Admin ID', 'Admin Username', 'Taken At'])
+                     'Prénom', 'Nom', 'Paiement', 'Date', 'Status', 'Admin ID', 'Admin Username', 
+                     'Taken At', 'Cancelled By', 'Cancelled At', 'Cancel Reason'])
     writer.writerows(orders)
     
     output.seek(0)
@@ -447,6 +454,119 @@ async def button_callback(update: Update, context):
         user_states[query.from_user.id] = {'state': 'waiting_firstname', 'service': 'Deezer'}
         await query.message.reply_text("📝 Entrez votre prénom :")
     
+    # Admin annule une commande
+    elif query.data.startswith('cancel_order_'):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.answer("⛔ Accès refusé.", show_alert=True)
+            return
+        
+        order_id = int(query.data.split('_')[2])
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT user_id, username, status FROM orders WHERE id=?", (order_id,))
+        result = c.fetchone()
+        
+        if not result:
+            await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[2] == 'terminee':
+            await query.answer("⚠️ Impossible d'annuler une commande terminée.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[2] == 'annulee':
+            await query.answer("⚠️ Cette commande est déjà annulée.", show_alert=True)
+            conn.close()
+            return
+        
+        # Annuler la commande
+        c.execute("""UPDATE orders 
+                     SET status='annulee', cancelled_by=?, cancelled_at=?, cancel_reason='Annulée par admin'
+                     WHERE id=?""",
+                  (query.from_user.id, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
+        conn.commit()
+        conn.close()
+        
+        # Notifier le client
+        try:
+            await context.bot.send_message(
+                chat_id=result[0],
+                text=f"❌ Votre commande #{order_id} a été annulée par l'administration.\n\n"
+                     f"Pour plus d'informations, contactez le support."
+            )
+        except:
+            pass
+        
+        # Modifier l'affichage avec bouton pour remettre en ligne
+        keyboard = [
+            [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'uncancel_order_{order_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                query.message.text + f"\n\n❌ **Annulée par @{query.from_user.username or query.from_user.id}**",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except:
+            pass
+        
+        await query.answer(f"✅ Commande #{order_id} annulée. Client notifié.", show_alert=True)
+    
+    # Admin remet en ligne une commande annulée
+    elif query.data.startswith('uncancel_order_'):
+        if query.from_user.id not in ADMIN_IDS:
+            await query.answer("⛔ Accès refusé.", show_alert=True)
+            return
+        
+        order_id = int(query.data.split('_')[2])
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT status FROM orders WHERE id=?", (order_id,))
+        result = c.fetchone()
+        
+        if not result:
+            await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[0] != 'annulee':
+            await query.answer("⚠️ Cette commande n'est pas annulée.", show_alert=True)
+            conn.close()
+            return
+        
+        # Remettre la commande en attente
+        c.execute("""UPDATE orders 
+                     SET status='en_attente', cancelled_by=NULL, cancelled_at=NULL, cancel_reason=NULL
+                     WHERE id=?""", (order_id,))
+        conn.commit()
+        conn.close()
+        
+        # Remettre les boutons d'origine
+        keyboard = [
+            [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
+            [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            # Enlever la mention d'annulation du texte
+            text_without_cancel = query.message.text.split('\n\n❌')[0]
+            await query.edit_message_text(
+                text_without_cancel + f"\n\n🔄 **Remise en ligne par @{query.from_user.username or query.from_user.id}**",
+                parse_mode='Markdown',
+                reply_markup=reply_markup
+            )
+        except:
+            pass
+        
+        await query.answer(f"✅ Commande #{order_id} remise en ligne avec succès !", show_alert=True)
+    
     # Admin prend en charge une commande
     elif query.data.startswith('take_order_'):
         if query.from_user.id not in ADMIN_IDS:
@@ -457,7 +577,7 @@ async def button_callback(update: Update, context):
         
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT status, admin_username FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT status, admin_username, admin_id FROM orders WHERE id=?", (order_id,))
         result = c.fetchone()
         
         if not result:
@@ -466,7 +586,19 @@ async def button_callback(update: Update, context):
             return
         
         if result[0] == 'en_cours':
-            await query.answer(f"⚠️ Déjà prise en charge par @{result[1]}", show_alert=True)
+            # Afficher qui a pris la commande
+            admin_name = result[1] or f"Admin ID {result[2]}"
+            await query.answer(f"⚠️ Commande déjà prise en charge par @{admin_name}", show_alert=True)
+            conn.close()
+            return
+        
+        if result[0] == 'annulee':
+            await query.answer("⚠️ Cette commande est annulée.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[0] == 'terminee':
+            await query.answer("⚠️ Cette commande est déjà terminée.", show_alert=True)
             conn.close()
             return
         
@@ -478,10 +610,11 @@ async def button_callback(update: Update, context):
         conn.commit()
         conn.close()
         
-        # Modifier les boutons pour afficher "Terminer" et "Remettre en ligne"
+        # Modifier les boutons
         keyboard = [
             [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')],
-            [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'release_order_{order_id}')]
+            [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'release_order_{order_id}')],
+            [InlineKeyboardButton("❌ Annuler", callback_data=f'cancel_order_{order_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -506,7 +639,7 @@ async def button_callback(update: Update, context):
         
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT admin_id FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT admin_id, status, user_id FROM orders WHERE id=?", (order_id,))
         result = c.fetchone()
         
         if not result:
@@ -514,8 +647,13 @@ async def button_callback(update: Update, context):
             conn.close()
             return
         
-        # Vérifier que c'est bien l'admin qui a pris la commande
-        if result[0] and result[0] != query.from_user.id:
+        if result[1] == 'annulee':
+            await query.answer("⚠️ Impossible de terminer une commande annulée.", show_alert=True)
+            conn.close()
+            return
+        
+        # Vérifier que c'est bien l'admin qui a pris la commande (sauf si en_attente)
+        if result[0] and result[0] != query.from_user.id and result[1] != 'en_attente':
             await query.answer("⚠️ Seul l'admin en charge peut terminer cette commande.", show_alert=True)
             conn.close()
             return
@@ -523,6 +661,16 @@ async def button_callback(update: Update, context):
         c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
         conn.commit()
         conn.close()
+        
+        # Notifier le client
+        try:
+            await context.bot.send_message(
+                chat_id=result[2],
+                text=f"✅ Votre commande #{order_id} a été livrée avec succès !\n\n"
+                     f"Merci d'avoir utilisé Serveur Express Bot 🎉"
+            )
+        except:
+            pass
         
         try:
             await query.edit_message_text(
@@ -544,11 +692,16 @@ async def button_callback(update: Update, context):
         
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT admin_id FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT admin_id, status FROM orders WHERE id=?", (order_id,))
         result = c.fetchone()
         
         if not result:
             await query.answer("❌ Commande introuvable.", show_alert=True)
+            conn.close()
+            return
+        
+        if result[1] == 'annulee':
+            await query.answer("⚠️ Impossible de remettre en ligne une commande annulée.", show_alert=True)
             conn.close()
             return
         
@@ -567,7 +720,7 @@ async def button_callback(update: Update, context):
         # Remettre les boutons d'origine
         keyboard = [
             [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
-            [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')]
+            [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -624,7 +777,8 @@ async def button_callback(update: Update, context):
             )
             
             keyboard = [
-                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')]
+                [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
+                [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
@@ -679,7 +833,7 @@ async def button_callback(update: Update, context):
             
             keyboard = [
                 [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
-                [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')]
+                [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
