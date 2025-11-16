@@ -6,25 +6,29 @@ import time
 import asyncio
 from datetime import datetime
 from io import StringIO
-from flask import Flask
+from flask import Flask, render_template_string, request, jsonify, redirect, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 import requests
+from functools import wraps
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 6193535472, 5174507979]
+WEB_PASSWORD = os.getenv('WEB_PASSWORD')  # Mot de passe pour l'interface web
 
-# Flask app (doit être défini en premier pour Gunicorn)
+# Flask app
 app = Flask(__name__)
+app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-@app.route('/')
-def home():
-    return "Bot Telegram actif !"
-
-@app.route('/health')
-def health():
-    return "OK", 200
+# Décorateur pour protéger les routes admin
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not session.get('logged_in'):
+            return redirect('/login')
+        return f(*args, **kwargs)
+    return decorated_function
 
 # Base de données
 def init_db():
@@ -50,35 +54,22 @@ def init_db():
                   cancelled_at TEXT,
                   cancel_reason TEXT)''')
     
-    # Ajouter les colonnes si elles n'existent pas (pour migration)
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN status TEXT DEFAULT 'en_attente'")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN admin_id INTEGER")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN admin_username TEXT")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN taken_at TEXT")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN cancelled_by INTEGER")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN cancelled_at TEXT")
-    except:
-        pass
-    try:
-        c.execute("ALTER TABLE orders ADD COLUMN cancel_reason TEXT")
-    except:
-        pass
+    # Ajouter les colonnes si elles n'existent pas
+    columns_to_add = [
+        ("status", "TEXT DEFAULT 'en_attente'"),
+        ("admin_id", "INTEGER"),
+        ("admin_username", "TEXT"),
+        ("taken_at", "TEXT"),
+        ("cancelled_by", "INTEGER"),
+        ("cancelled_at", "TEXT"),
+        ("cancel_reason", "TEXT")
+    ]
+    
+    for column, col_type in columns_to_add:
+        try:
+            c.execute(f"ALTER TABLE orders ADD COLUMN {column} {col_type}")
+        except:
+            pass
     
     conn.commit()
     conn.close()
@@ -93,13 +84,11 @@ def force_kill_all_instances():
     print("🔥 Forçage de la suppression de toutes les instances...")
     
     try:
-        # Supprimer le webhook ET les mises à jour en attente
         url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
         response = requests.get(url, timeout=10)
         print(f"🔧 Webhook supprimé: {response.json()}")
         time.sleep(3)
         
-        # Forcer la lecture de TOUTES les mises à jour en attente
         print("⚡ Vidage des mises à jour en attente...")
         for i in range(10):
             try:
@@ -108,7 +97,6 @@ def force_kill_all_instances():
                 if resp.status_code == 200:
                     data = resp.json()
                     if data.get('result'):
-                        # Obtenir le dernier update_id et le confirmer
                         last_id = max([u['update_id'] for u in data['result']])
                         url3 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_id+1}&timeout=1"
                         requests.get(url3, timeout=5)
@@ -125,7 +113,654 @@ def force_kill_all_instances():
         print(f"⚠️ Erreur pendant le nettoyage: {e}")
         time.sleep(3)
 
-# Commande /start
+# ============= INTERFACE WEB =============
+
+HTML_LOGIN = '''
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Connexion - Admin Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .login-container {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            width: 90%;
+            max-width: 400px;
+        }
+        h1 {
+            text-align: center;
+            color: #667eea;
+            margin-bottom: 30px;
+            font-size: 28px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .error {
+            background: #fee;
+            color: #c33;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="login-container">
+        <h1>🔐 Connexion Admin</h1>
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+        <form method="POST">
+            <div class="form-group">
+                <label>Mot de passe</label>
+                <input type="password" name="password" required autofocus>
+            </div>
+            <button type="submit">Se connecter</button>
+        </form>
+    </div>
+</body>
+</html>
+'''
+
+HTML_DASHBOARD = '''
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard Admin - Serveur Express Bot</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header-content {
+            max-width: 1400px;
+            margin: 0 auto;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .header h1 { font-size: 24px; }
+        .logout-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+        }
+        .logout-btn:hover {
+            background: rgba(255,255,255,0.3);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 30px auto;
+            padding: 0 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            border-left: 4px solid #667eea;
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 14px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .orders-section {
+            background: white;
+            padding: 30px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+        .section-title {
+            font-size: 22px;
+            margin-bottom: 20px;
+            color: #333;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+        .filters {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .filter-btn {
+            padding: 10px 20px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+        }
+        .filter-btn:hover {
+            transform: translateY(-2px);
+        }
+        .order-card {
+            background: #f9f9f9;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            border-left: 4px solid #ddd;
+            transition: all 0.3s;
+        }
+        .order-card:hover {
+            box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+            transform: translateX(5px);
+        }
+        .order-card.en_attente { border-left-color: #ffa500; }
+        .order-card.en_cours { border-left-color: #2196f3; }
+        .order-card.terminee { border-left-color: #4caf50; }
+        .order-card.annulee { border-left-color: #f44336; }
+        .order-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+        .order-id {
+            font-weight: bold;
+            font-size: 18px;
+            color: #667eea;
+        }
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+        .status-badge.en_attente { background: #fff3cd; color: #856404; }
+        .status-badge.en_cours { background: #d1ecf1; color: #0c5460; }
+        .status-badge.terminee { background: #d4edda; color: #155724; }
+        .status-badge.annulee { background: #f8d7da; color: #721c24; }
+        .order-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        .detail-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .detail-item strong {
+            color: #667eea;
+        }
+        .order-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .action-btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        .action-btn:hover {
+            transform: translateY(-2px);
+        }
+        .btn-take { background: #2196f3; color: white; }
+        .btn-complete { background: #4caf50; color: white; }
+        .btn-cancel { background: #f44336; color: white; }
+        .btn-release { background: #ff9800; color: white; }
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+        .empty-state svg {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+            opacity: 0.3;
+        }
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: #667eea;
+            color: white;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            transition: all 0.3s;
+        }
+        .refresh-btn:hover {
+            transform: scale(1.1) rotate(180deg);
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-content">
+            <h1>🤖 Dashboard Serveur Express Bot</h1>
+            <a href="/logout" class="logout-btn">Déconnexion</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>📦 Total Commandes</h3>
+                <div class="value" id="total-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>⏳ En Attente</h3>
+                <div class="value" id="pending-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>🔄 En Cours</h3>
+                <div class="value" id="inprogress-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>✅ Terminées</h3>
+                <div class="value" id="completed-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>💰 Chiffre d'Affaires</h3>
+                <div class="value" id="revenue">0€</div>
+            </div>
+            <div class="stat-card">
+                <h3>💵 Bénéfices</h3>
+                <div class="value" id="profit">0€</div>
+            </div>
+        </div>
+
+        <div class="orders-section">
+            <h2 class="section-title">📋 Gestion des Commandes</h2>
+            
+            <div class="filters">
+                <button class="filter-btn active" onclick="filterOrders('all')">Toutes</button>
+                <button class="filter-btn" onclick="filterOrders('en_attente')">En Attente</button>
+                <button class="filter-btn" onclick="filterOrders('en_cours')">En Cours</button>
+                <button class="filter-btn" onclick="filterOrders('terminee')">Terminées</button>
+                <button class="filter-btn" onclick="filterOrders('annulee')">Annulées</button>
+            </div>
+
+            <div id="orders-container"></div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadData()" title="Rafraîchir">🔄</button>
+
+    <script>
+        let currentFilter = 'all';
+
+        async function loadData() {
+            try {
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                
+                // Mise à jour des stats
+                document.getElementById('total-orders').textContent = data.stats.total_orders;
+                document.getElementById('pending-orders').textContent = data.stats.pending_orders;
+                document.getElementById('inprogress-orders').textContent = data.stats.inprogress_orders;
+                document.getElementById('completed-orders').textContent = data.stats.completed_orders;
+                document.getElementById('revenue').textContent = data.stats.revenue.toFixed(2) + '€';
+                document.getElementById('profit').textContent = data.stats.profit.toFixed(2) + '€';
+                
+                // Affichage des commandes
+                displayOrders(data.orders);
+            } catch (error) {
+                console.error('Erreur:', error);
+            }
+        }
+
+        function displayOrders(orders) {
+            const container = document.getElementById('orders-container');
+            
+            const filtered = currentFilter === 'all' 
+                ? orders 
+                : orders.filter(o => o.status === currentFilter);
+            
+            if (filtered.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <svg viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14z"/>
+                        </svg>
+                        <h3>Aucune commande</h3>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = filtered.map(order => {
+                const statusText = {
+                    'en_attente': '⏳ En Attente',
+                    'en_cours': '🔄 En Cours (OCCUPÉ)',
+                    'terminee': '✅ Terminée',
+                    'annulee': '❌ Annulée'
+                };
+                
+                let actions = '';
+                if (order.status === 'en_attente') {
+                    actions = `
+                        <button class="action-btn btn-take" onclick="takeOrder(${order.id})">✋ Prendre</button>
+                        <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌ Annuler</button>
+                    `;
+                } else if (order.status === 'en_cours') {
+                    actions = `
+                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ Terminer</button>
+                        <button class="action-btn btn-release" onclick="releaseOrder(${order.id})">🔄 Remettre</button>
+                        <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌ Annuler</button>
+                    `;
+                }
+                
+                const details = order.service === 'Uber Eats' ? `
+                    <div class="detail-item">🍔 <strong>Service:</strong> Uber Eats</div>
+                    <div class="detail-item">💰 <strong>Prix:</strong> ${order.price}€</div>
+                    <div class="detail-item">📍 <strong>Adresse:</strong> ${order.address}</div>
+                ` : `
+                    <div class="detail-item">🎵 <strong>Service:</strong> Deezer</div>
+                    <div class="detail-item">📝 <strong>Nom:</strong> ${order.first_name} ${order.last_name}</div>
+                `;
+                
+                const adminInfo = order.admin_username ? 
+                    `<div class="detail-item">👨‍💼 <strong>Admin:</strong> @${order.admin_username}</div>` : '';
+                
+                return `
+                    <div class="order-card ${order.status}">
+                        <div class="order-header">
+                            <div class="order-id">#${order.id}</div>
+                            <div class="status-badge ${order.status}">${statusText[order.status]}</div>
+                        </div>
+                        <div class="order-details">
+                            ${details}
+                            <div class="detail-item">👤 <strong>Client:</strong> @${order.username}</div>
+                            <div class="detail-item">💳 <strong>Paiement:</strong> ${order.payment_method}</div>
+                            <div class="detail-item">🕐 <strong>Date:</strong> ${order.timestamp}</div>
+                            ${adminInfo}
+                        </div>
+                        <div class="order-actions">
+                            ${actions}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function filterOrders(filter) {
+            currentFilter = filter;
+            document.querySelectorAll('.filter-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            event.target.classList.add('active');
+            loadData();
+        }
+
+        async function takeOrder(orderId) {
+            if (!confirm('Prendre en charge cette commande ?')) return;
+            try {
+                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+                loadData();
+            } catch (error) {
+                alert('Erreur: ' + error);
+            }
+        }
+
+        async function completeOrder(orderId) {
+            if (!confirm('Marquer cette commande comme terminée ?')) return;
+            try {
+                await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
+                loadData();
+            } catch (error) {
+                alert('Erreur: ' + error);
+            }
+        }
+
+        async function cancelOrder(orderId) {
+            if (!confirm('Annuler cette commande ?')) return;
+            try {
+                await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
+                loadData();
+            } catch (error) {
+                alert('Erreur: ' + error);
+            }
+        }
+
+        async function releaseOrder(orderId) {
+            if (!confirm('Remettre cette commande en ligne ?')) return;
+            try {
+                await fetch(`/api/order/${orderId}/release`, { method: 'POST' });
+                loadData();
+            } catch (error) {
+                alert('Erreur: ' + error);
+            }
+        }
+
+        // Chargement initial et auto-refresh toutes les 10 secondes
+        loadData();
+        setInterval(loadData, 10000);
+    </script>
+</body>
+</html>
+'''
+
+@app.route('/')
+def home():
+    return "Bot Telegram actif !"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        password = request.form.get('password')
+        if password == WEB_PASSWORD:
+            session['logged_in'] = True
+            return redirect('/dashboard')
+        return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
+    return render_template_string(HTML_LOGIN)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect('/login')
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    return render_template_string(HTML_DASHBOARD)
+
+@app.route('/api/dashboard')
+@login_required
+def api_dashboard():
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    # Stats
+    c.execute("SELECT COUNT(*) FROM orders WHERE status != 'annulee'")
+    total_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
+    pending_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_cours'")
+    inprogress_orders = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
+    completed_orders = c.fetchone()[0]
+    
+    c.execute("SELECT SUM(price) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
+    revenue = c.fetchone()[0] or 0
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE service='Uber Eats' AND status != 'annulee'")
+    ubereats_count = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE service='Deezer' AND status != 'annulee'")
+    deezer_count = c.fetchone()[0]
+    
+    profit = (ubereats_count * 5) + (deezer_count * 6)
+    
+    # Commandes
+    c.execute("""SELECT id, user_id, username, service, price, address, first_name, last_name,
+                        payment_method, timestamp, status, admin_username
+                 FROM orders ORDER BY id DESC LIMIT 50""")
+    orders = c.fetchall()
+    conn.close()
+    
+    orders_list = [{
+        'id': o[0],
+        'user_id': o[1],
+        'username': o[2] or 'Unknown',
+        'service': o[3],
+        'price': o[4],
+        'address': o[5],
+        'first_name': o[6],
+        'last_name': o[7],
+        'payment_method': o[8],
+        'timestamp': o[9],
+        'status': o[10],
+        'admin_username': o[11]
+    } for o in orders]
+    
+    return jsonify({
+        'stats': {
+            'total_orders': total_orders,
+            'pending_orders': pending_orders,
+            'inprogress_orders': inprogress_orders,
+            'completed_orders': completed_orders,
+            'revenue': revenue,
+            'profit': profit
+        },
+        'orders': orders_list
+    })
+
+@app.route('/api/order/<int:order_id>/take', methods=['POST'])
+@login_required
+def api_take_order(order_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username='WebAdmin', taken_at=? WHERE id=? AND status='en_attente'",
+              (999999, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/complete', methods=['POST'])
+@login_required
+def api_complete_order(order_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
+@login_required
+def api_cancel_order(order_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='annulee', cancelled_by=999999, cancelled_at=?, cancel_reason='Annulée via web' WHERE id=?",
+              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/release', methods=['POST'])
+@login_required
+def api_release_order(order_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL WHERE id=?", (order_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+# ============= CODE TELEGRAM (modifié) =============
+
 async def start(update: Update, context):
     keyboard = [
         [InlineKeyboardButton("🍔 Uber Eats", callback_data='service_ubereats')],
@@ -138,7 +773,6 @@ async def start(update: Update, context):
         reply_markup=reply_markup
     )
 
-# Commande /help (admin uniquement)
 async def help_command(update: Update, context):
     user_id = update.effective_user.id
     
@@ -155,16 +789,16 @@ async def help_command(update: Update, context):
         "/export - Exporter toutes les commandes en CSV\n"
         "/broadcast [message] - Envoyer un message à tous les clients\n\n"
         "🔔 **Fonctionnalités :**\n"
-        "• Commandes Uber Eats (20-23€) - 5€ de bénéfice\n"
+        "• Commandes Uber Eats (25-30€) - 5€ de bénéfice\n"
         "• Comptes Deezer Premium - 6€ de bénéfice\n"
         "• Suivi en temps réel\n"
         "• Possibilité d'annuler les commandes\n"
-        "• Paiement : PayPal, Virement, Revolut"
+        "• Paiement : PayPal, Virement, Revolut\n\n"
+        "🌐 **Interface Web :** Accessible sur votre URL/dashboard"
     )
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
-# Commande /stats (admin)
 async def stats(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -200,7 +834,6 @@ async def stats(update: Update, context):
     c.execute("SELECT COUNT(*) FROM orders WHERE status='annulee'")
     cancelled_orders = c.fetchone()[0]
     
-    # Calcul des bénéfices : 5€ pour Uber Eats, 6€ pour Deezer
     profit = (ubereats_orders * 5) + (deezer_orders * 6)
     
     conn.close()
@@ -213,7 +846,7 @@ async def stats(update: Update, context):
         f"🎵 Deezer : {deezer_orders} (6€/commande)\n\n"
         f"📋 Statuts :\n"
         f"⏳ En attente : {pending_orders}\n"
-        f"🔄 En cours : {in_progress_orders}\n"
+        f"🔄 En cours (OCCUPÉ) : {in_progress_orders}\n"
         f"✅ Terminées : {completed_orders}\n"
         f"❌ Annulées : {cancelled_orders}\n\n"
         f"💰 Chiffre d'affaires : {total_revenue:.2f}€\n"
@@ -221,7 +854,6 @@ async def stats(update: Update, context):
         parse_mode='Markdown'
     )
 
-# Commande /encours (admin) - voir commandes en attente
 async def encours(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -243,7 +875,7 @@ async def encours(update: Update, context):
     
     message = "📋 **Commandes en attente/cours :**\n\n"
     for order in orders:
-        status_emoji = "⏳" if order[10] == "en_attente" else "🔄"
+        status_emoji = "⏳" if order[10] == "en_attente" else "🔄 OCCUPÉ"
         admin_info = f"\n👨‍💼 Pris par : @{order[11]}" if order[11] else ""
         
         if order[3] == 'Uber Eats':
@@ -268,7 +900,6 @@ async def encours(update: Update, context):
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
-# Commande /disponibles (admin) - voir uniquement les commandes disponibles
 async def disponibles(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -308,13 +939,13 @@ async def disponibles(update: Update, context):
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-            if order[4]:  # Si photo existe
+            if order[4]:
                 try:
                     await update.message.reply_photo(photo=order[4])
                 except:
                     pass
         
-        else:  # Deezer
+        else:
             message = (
                 f"⏳ **Commande #{order[0]} - Deezer**\n\n"
                 f"👤 Client : @{order[2]} (ID: {order[1]})\n"
@@ -331,7 +962,6 @@ async def disponibles(update: Update, context):
             
             await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
 
-# Commande /historique (admin)
 async def historique(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -354,7 +984,7 @@ async def historique(update: Update, context):
     for order in orders:
         status_map = {
             "en_attente": "⏳ En attente",
-            "en_cours": "🔄 En cours",
+            "en_cours": "🔄 En cours (OCCUPÉ)",
             "terminee": "✅ Terminée",
             "annulee": "❌ Annulée"
         }
@@ -383,7 +1013,6 @@ async def historique(update: Update, context):
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
-# Commande /export (admin)
 async def export(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -412,7 +1041,6 @@ async def export(update: Update, context):
         filename=f'orders_{datetime.now().strftime("%Y%m%d_%H%M%S")}.csv'
     )
 
-# Commande /broadcast (admin)
 async def broadcast(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
         await update.message.reply_text("⛔ Accès refusé.")
@@ -440,12 +1068,10 @@ async def broadcast(update: Update, context):
     
     await update.message.reply_text(f"📢 Message envoyé à {sent} utilisateurs.")
 
-# Gestion des boutons
 async def button_callback(update: Update, context):
     query = update.callback_query
     await query.answer()
     
-    # Choix du service
     if query.data == 'service_ubereats':
         user_states[query.from_user.id] = {'state': 'waiting_photo', 'service': 'Uber Eats'}
         await query.message.reply_text("📸 Envoyez la photo de votre article :")
@@ -454,7 +1080,6 @@ async def button_callback(update: Update, context):
         user_states[query.from_user.id] = {'state': 'waiting_firstname', 'service': 'Deezer'}
         await query.message.reply_text("📝 Entrez votre prénom :")
     
-    # Admin annule une commande
     elif query.data.startswith('cancel_order_'):
         if query.from_user.id not in ADMIN_IDS:
             await query.answer("⛔ Accès refusé.", show_alert=True)
@@ -482,7 +1107,6 @@ async def button_callback(update: Update, context):
             conn.close()
             return
         
-        # Annuler la commande
         c.execute("""UPDATE orders 
                      SET status='annulee', cancelled_by=?, cancelled_at=?, cancel_reason='Annulée par admin'
                      WHERE id=?""",
@@ -490,7 +1114,6 @@ async def button_callback(update: Update, context):
         conn.commit()
         conn.close()
         
-        # Notifier le client
         try:
             await context.bot.send_message(
                 chat_id=result[0],
@@ -500,7 +1123,6 @@ async def button_callback(update: Update, context):
         except:
             pass
         
-        # Modifier l'affichage avec bouton pour remettre en ligne
         keyboard = [
             [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'uncancel_order_{order_id}')]
         ]
@@ -517,7 +1139,6 @@ async def button_callback(update: Update, context):
         
         await query.answer(f"✅ Commande #{order_id} annulée. Client notifié.", show_alert=True)
     
-    # Admin remet en ligne une commande annulée
     elif query.data.startswith('uncancel_order_'):
         if query.from_user.id not in ADMIN_IDS:
             await query.answer("⛔ Accès refusé.", show_alert=True)
@@ -540,14 +1161,12 @@ async def button_callback(update: Update, context):
             conn.close()
             return
         
-        # Remettre la commande en attente
         c.execute("""UPDATE orders 
                      SET status='en_attente', cancelled_by=NULL, cancelled_at=NULL, cancel_reason=NULL
                      WHERE id=?""", (order_id,))
         conn.commit()
         conn.close()
         
-        # Remettre les boutons d'origine
         keyboard = [
             [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
             [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
@@ -555,7 +1174,6 @@ async def button_callback(update: Update, context):
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         try:
-            # Enlever la mention d'annulation du texte
             text_without_cancel = query.message.text.split('\n\n❌')[0]
             await query.edit_message_text(
                 text_without_cancel + f"\n\n🔄 **Remise en ligne par @{query.from_user.username or query.from_user.id}**",
@@ -567,7 +1185,6 @@ async def button_callback(update: Update, context):
         
         await query.answer(f"✅ Commande #{order_id} remise en ligne avec succès !", show_alert=True)
     
-    # Admin prend en charge une commande
     elif query.data.startswith('take_order_'):
         if query.from_user.id not in ADMIN_IDS:
             await query.answer("⛔ Accès refusé.", show_alert=True)
@@ -586,9 +1203,8 @@ async def button_callback(update: Update, context):
             return
         
         if result[0] == 'en_cours':
-            # Afficher qui a pris la commande
             admin_name = result[1] or f"Admin ID {result[2]}"
-            await query.answer(f"⚠️ Commande déjà prise en charge par @{admin_name}", show_alert=True)
+            await query.answer(f"⚠️ Commande déjà OCCUPÉE par @{admin_name}", show_alert=True)
             conn.close()
             return
         
@@ -610,7 +1226,6 @@ async def button_callback(update: Update, context):
         conn.commit()
         conn.close()
         
-        # Modifier les boutons
         keyboard = [
             [InlineKeyboardButton("✅ Terminer", callback_data=f'complete_order_{order_id}')],
             [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'release_order_{order_id}')],
@@ -620,7 +1235,7 @@ async def button_callback(update: Update, context):
         
         try:
             await query.edit_message_text(
-                query.message.text + f"\n\n🔄 **En cours par @{query.from_user.username or query.from_user.id}**",
+                query.message.text + f"\n\n🔄 **OCCUPÉ - En cours par @{query.from_user.username or query.from_user.id}**",
                 parse_mode='Markdown',
                 reply_markup=reply_markup
             )
@@ -629,7 +1244,6 @@ async def button_callback(update: Update, context):
         
         await query.answer(f"✅ Commande #{order_id} prise en charge !", show_alert=True)
     
-    # Admin termine une commande
     elif query.data.startswith('complete_order_'):
         if query.from_user.id not in ADMIN_IDS:
             await query.answer("⛔ Accès refusé.", show_alert=True)
@@ -652,7 +1266,6 @@ async def button_callback(update: Update, context):
             conn.close()
             return
         
-        # Vérifier que c'est bien l'admin qui a pris la commande (sauf si en_attente)
         if result[0] and result[0] != query.from_user.id and result[1] != 'en_attente':
             await query.answer("⚠️ Seul l'admin en charge peut terminer cette commande.", show_alert=True)
             conn.close()
@@ -662,7 +1275,6 @@ async def button_callback(update: Update, context):
         conn.commit()
         conn.close()
         
-        # Notifier le client
         try:
             await context.bot.send_message(
                 chat_id=result[2],
@@ -682,7 +1294,6 @@ async def button_callback(update: Update, context):
         
         await query.answer(f"✅ Commande #{order_id} marquée comme terminée !", show_alert=True)
     
-    # Admin remet une commande en ligne
     elif query.data.startswith('release_order_'):
         if query.from_user.id not in ADMIN_IDS:
             await query.answer("⛔ Accès refusé.", show_alert=True)
@@ -705,7 +1316,6 @@ async def button_callback(update: Update, context):
             conn.close()
             return
         
-        # Vérifier que c'est bien l'admin qui a pris la commande
         if result[0] != query.from_user.id:
             await query.answer("⚠️ Seul l'admin en charge peut remettre cette commande en ligne.", show_alert=True)
             conn.close()
@@ -717,7 +1327,6 @@ async def button_callback(update: Update, context):
         conn.commit()
         conn.close()
         
-        # Remettre les boutons d'origine
         keyboard = [
             [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
             [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
@@ -735,7 +1344,6 @@ async def button_callback(update: Update, context):
         
         await query.answer(f"🔄 Commande #{order_id} remise en ligne !", show_alert=True)
     
-    # Choix du paiement (Uber Eats)
     elif query.data in ['paypal', 'virement', 'revolut']:
         state = user_states.get(query.from_user.id)
         if state and state.get('service') == 'Uber Eats' and state['state'] == 'waiting_payment':
@@ -792,7 +1400,6 @@ async def button_callback(update: Update, context):
             
             del user_states[query.from_user.id]
     
-    # Choix du paiement (Deezer)
     elif query.data in ['paypal_deezer', 'virement_deezer', 'revolut_deezer']:
         state = user_states.get(query.from_user.id)
         if state and state.get('service') == 'Deezer' and state['state'] == 'waiting_payment_deezer':
@@ -846,7 +1453,6 @@ async def button_callback(update: Update, context):
             
             del user_states[query.from_user.id]
 
-# Gestion des messages
 async def handle_message(update: Update, context):
     user_id = update.effective_user.id
     state = user_states.get(user_id)
@@ -860,21 +1466,21 @@ async def handle_message(update: Update, context):
             if update.message.photo:
                 state['photo_id'] = update.message.photo[-1].file_id
                 state['state'] = 'waiting_price'
-                await update.message.reply_text("💰 Indiquez le prix (entre 20€ et 23€) :")
+                await update.message.reply_text("💰 Indiquez le prix (entre 25€ et 30€) :")
             else:
                 await update.message.reply_text("❌ Veuillez envoyer une photo.")
         
         elif state['state'] == 'waiting_price':
             try:
                 price = float(update.message.text.replace('€', '').replace(',', '.').strip())
-                if 20 <= price <= 23:
+                if 25 <= price <= 30:
                     state['price'] = price
                     state['state'] = 'waiting_address'
                     await update.message.reply_text("🏠 Entrez maintenant votre adresse :")
                 else:
-                    await update.message.reply_text("❌ Le prix doit être entre 20€ et 23€.")
+                    await update.message.reply_text("❌ Le prix doit être entre 25€ et 30€.")
             except ValueError:
-                await update.message.reply_text("❌ Prix invalide. Exemple : 21.50")
+                await update.message.reply_text("❌ Prix invalide. Exemple : 27.50")
         
         elif state['state'] == 'waiting_address':
             state['address'] = update.message.text
@@ -913,14 +1519,12 @@ async def handle_message(update: Update, context):
                 reply_markup=reply_markup
             )
 
-# Fonction asynchrone pour démarrer le bot
 async def run_telegram_bot():
     """Démarre le bot Telegram en mode polling avec event loop"""
     print("🤖 Initialisation du bot Telegram...")
     
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
-    # Enregistrer toutes les commandes
     application.add_handler(CommandHandler('start', start))
     application.add_handler(CommandHandler('help', help_command))
     application.add_handler(CommandHandler('stats', stats))
@@ -946,7 +1550,6 @@ async def run_telegram_bot():
             await application.initialize()
             await application.start()
             
-            # Configuration du polling avec paramètres optimisés
             await application.updater.start_polling(
                 drop_pending_updates=True,
                 allowed_updates=Update.ALL_TYPES,
