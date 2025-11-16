@@ -1404,18 +1404,22 @@ async def button_callback(update: Update, context):
             
             for admin_id in ADMIN_IDS:
                 try:
-                    sent_msg = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                    msg1 = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
                                                    parse_mode='Markdown', reply_markup=reply_markup)
-                    photo_msg = await context.bot.send_photo(chat_id=admin_id, photo=state['photo_id'])
+                    msg2 = await context.bot.send_photo(chat_id=admin_id, photo=state['photo_id'])
                     
-                    conn = sqlite3.connect('orders.db', check_same_thread=False)
-                    c = conn.cursor()
-                    c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
-                             (order_id, admin_id, sent_msg.message_id, photo_msg.message_id))
-                    conn.commit()
-                    conn.close()
-                except:
-                    pass
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    
+                    c2.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                             (order_id, admin_id, msg1.message_id, msg2.message_id))
+                    
+                    conn2.commit()
+                    conn2.close()
+                    
+                    print(f"✅ Commande #{order_id} enregistrée pour admin {admin_id}: msg={msg1.message_id}, photo={msg2.message_id}")
+                except Exception as e:
+                    print(f"❌ Erreur envoi admin {admin_id}: {e}")
             
             del user_states[query.from_user.id]
     
@@ -1468,14 +1472,14 @@ async def button_callback(update: Update, context):
                     sent_msg = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
                                                    parse_mode='Markdown', reply_markup=reply_markup)
                     
-                    conn = sqlite3.connect('orders.db', check_same_thread=False)
-                    c = conn.cursor()
-                    c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    c2.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
                              (order_id, admin_id, sent_msg.message_id, None))
-                    conn.commit()
-                    conn.close()
-                except:
-                    pass
+                    conn2.commit()
+                    conn2.close()
+                except Exception as e:
+                    print(f"Erreur envoi admin {admin_id}: {e}")
             
             del user_states[query.from_user.id]
 
