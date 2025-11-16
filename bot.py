@@ -15,7 +15,7 @@ from functools import wraps
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 6193535472, 5174507979]
-WEB_PASSWORD = os.getenv('WEB_PASSWORD')  # Mot de passe pour l'interface web
+WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 # Flask app
 app = Flask(__name__)
@@ -54,7 +54,6 @@ def init_db():
                   cancelled_at TEXT,
                   cancel_reason TEXT)''')
     
-    # Ajouter les colonnes si elles n'existent pas
     columns_to_add = [
         ("status", "TEXT DEFAULT 'en_attente'"),
         ("admin_id", "INTEGER"),
@@ -479,7 +478,6 @@ HTML_DASHBOARD = '''
                 const response = await fetch('/api/dashboard');
                 const data = await response.json();
                 
-                // Mise à jour des stats
                 document.getElementById('total-orders').textContent = data.stats.total_orders;
                 document.getElementById('pending-orders').textContent = data.stats.pending_orders;
                 document.getElementById('inprogress-orders').textContent = data.stats.inprogress_orders;
@@ -487,7 +485,6 @@ HTML_DASHBOARD = '''
                 document.getElementById('revenue').textContent = data.stats.revenue.toFixed(2) + '€';
                 document.getElementById('profit').textContent = data.stats.profit.toFixed(2) + '€';
                 
-                // Affichage des commandes
                 displayOrders(data.orders);
             } catch (error) {
                 console.error('Erreur:', error);
@@ -617,7 +614,6 @@ HTML_DASHBOARD = '''
             }
         }
 
-        // Chargement initial et auto-refresh toutes les 10 secondes
         loadData();
         setInterval(loadData, 10000);
     </script>
@@ -659,7 +655,6 @@ def api_dashboard():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    # Stats
     c.execute("SELECT COUNT(*) FROM orders WHERE status != 'annulee'")
     total_orders = c.fetchone()[0]
     
@@ -683,7 +678,6 @@ def api_dashboard():
     
     profit = (ubereats_count * 5) + (deezer_count * 6)
     
-    # Commandes
     c.execute("""SELECT id, user_id, username, service, price, address, first_name, last_name,
                         payment_method, timestamp, status, admin_username
                  FROM orders ORDER BY id DESC LIMIT 50""")
@@ -759,7 +753,7 @@ def api_release_order(order_id):
     conn.close()
     return jsonify({'success': True})
 
-# ============= CODE TELEGRAM (modifié) =============
+# ============= CODE TELEGRAM =============
 
 async def start(update: Update, context):
     keyboard = [
@@ -1123,21 +1117,15 @@ async def button_callback(update: Update, context):
         except:
             pass
         
-        keyboard = [
-            [InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f'uncancel_order_{order_id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.delete_message(
+                    chat_id=admin_id,
+                    message_id=query.message.message_id
+                )
+            except Exception as e:
+                print(f"Impossible de supprimer le message pour admin {admin_id}: {e}")
         
-        try:
-            await query.edit_message_text(
-                query.message.text + f"\n\n❌ **Annulée par @{query.from_user.username or query.from_user.id}**",
-                parse_mode='Markdown',
-                reply_markup=reply_markup
-            )
-        except:
-            pass
-        
-        await query.answer(f"✅ Commande #{order_id} annulée. Client notifié.", show_alert=True)
     
     elif query.data.startswith('uncancel_order_'):
         if query.from_user.id not in ADMIN_IDS:
@@ -1460,7 +1448,6 @@ async def handle_message(update: Update, context):
     if not state:
         return
     
-    # ===== FLUX UBER EATS =====
     if state.get('service') == 'Uber Eats':
         if state['state'] == 'waiting_photo':
             if update.message.photo:
@@ -1496,7 +1483,6 @@ async def handle_message(update: Update, context):
                 reply_markup=reply_markup
             )
     
-    # ===== FLUX DEEZER =====
     elif state.get('service') == 'Deezer':
         if state['state'] == 'waiting_firstname':
             state['first_name'] = update.message.text.strip()
@@ -1520,7 +1506,6 @@ async def handle_message(update: Update, context):
             )
 
 async def run_telegram_bot():
-    """Démarre le bot Telegram en mode polling avec event loop"""
     print("🤖 Initialisation du bot Telegram...")
     
     application = ApplicationBuilder().token(BOT_TOKEN).build()
@@ -1599,7 +1584,6 @@ async def run_telegram_bot():
                     raise
 
 def start_telegram_bot():
-    """Démarre le bot dans un nouveau event loop"""
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     try:
