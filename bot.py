@@ -54,6 +54,12 @@ def init_db():
                   cancelled_at TEXT,
                   cancel_reason TEXT)''')
     
+    c.execute('''CREATE TABLE IF NOT EXISTS order_messages
+                 (order_id INTEGER,
+                  admin_id INTEGER,
+                  message_id INTEGER,
+                  photo_message_id INTEGER)''')
+    
     columns_to_add = [
         ("status", "TEXT DEFAULT 'en_attente'"),
         ("admin_id", "INTEGER"),
@@ -907,6 +913,9 @@ async def disponibles(update: Update, context):
                  WHERE status='en_attente'
                  ORDER BY id DESC""")
     orders = c.fetchall()
+    
+    c.execute("CREATE TABLE IF NOT EXISTS order_messages (order_id INTEGER, admin_id INTEGER, message_id INTEGER, photo_message_id INTEGER)")
+    
     conn.close()
     
     if not orders:
@@ -916,6 +925,9 @@ async def disponibles(update: Update, context):
     await update.message.reply_text(f"🛒 **{len(orders)} commande(s) disponible(s) :**\n")
     
     for order in orders:
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        
         if order[3] == 'Uber Eats':
             message = (
                 f"⏳ **Commande #{order[0]} - Uber Eats**\n\n"
@@ -932,12 +944,18 @@ async def disponibles(update: Update, context):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            sent_message = await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            photo_message = None
+            
             if order[4]:
                 try:
-                    await update.message.reply_photo(photo=order[4])
+                    photo_message = await update.message.reply_photo(photo=order[4])
                 except:
                     pass
+            
+            c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                     (order[0], update.effective_user.id, sent_message.message_id, 
+                      photo_message.message_id if photo_message else None))
         
         else:
             message = (
@@ -954,7 +972,13 @@ async def disponibles(update: Update, context):
             ]
             reply_markup = InlineKeyboardMarkup(keyboard)
             
-            await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            sent_message = await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+            
+            c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                     (order[0], update.effective_user.id, sent_message.message_id, None))
+        
+        conn.commit()
+        conn.close()
 
 async def historique(update: Update, context):
     if update.effective_user.id not in ADMIN_IDS:
@@ -1380,9 +1404,16 @@ async def button_callback(update: Update, context):
             
             for admin_id in ADMIN_IDS:
                 try:
-                    await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                    sent_msg = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
                                                    parse_mode='Markdown', reply_markup=reply_markup)
-                    await context.bot.send_photo(chat_id=admin_id, photo=state['photo_id'])
+                    photo_msg = await context.bot.send_photo(chat_id=admin_id, photo=state['photo_id'])
+                    
+                    conn = sqlite3.connect('orders.db', check_same_thread=False)
+                    c = conn.cursor()
+                    c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                             (order_id, admin_id, sent_msg.message_id, photo_msg.message_id))
+                    conn.commit()
+                    conn.close()
                 except:
                     pass
             
@@ -1434,8 +1465,15 @@ async def button_callback(update: Update, context):
             
             for admin_id in ADMIN_IDS:
                 try:
-                    await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                    sent_msg = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
                                                    parse_mode='Markdown', reply_markup=reply_markup)
+                    
+                    conn = sqlite3.connect('orders.db', check_same_thread=False)
+                    c = conn.cursor()
+                    c.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                             (order_id, admin_id, sent_msg.message_id, None))
+                    conn.commit()
+                    conn.close()
                 except:
                     pass
             
