@@ -14,7 +14,7 @@ from functools import wraps
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 6193535472, 5174507979]
+ADMIN_IDS = [6976573567, 5174507979]
 WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 # Flask app
@@ -1410,15 +1410,180 @@ async def button_callback(update: Update, context):
                       (query.from_user.id, query.from_user.username or 'Unknown', state['service_name'],
                        state['plan_label'], state['price'], state['cost'], state['first_name'], state['last_name'],
                        payment_method, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        d>/take', methods=['POST'])
-@login_required
-def api_take_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username='WebAdmin', taken_at=? WHERE id=? AND status='en_attente'",
-              (999999, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
+            order_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        service_display = 'Deezer Premium' if state['service'] == 'deezer' else state['service_name']
+        plan_display = 'Premium' if state['service'] == 'deezer' else state['plan_label']
+        price = 6.00 if state['service'] == 'deezer' else state['price']
+        profit = 6.00 if state['service'] == 'deezer' else (state['price'] - state['cost'])
+        
+        await query.message.reply_text(
+            f"✅ Votre commande **{service_display}** a bien été envoyée ! 🎉\n\n"
+            "📦 Vous recevrez les informations d'ici peu 🚚💨"
+        )
+        
+        admin_message = (
+            f"🔔 **Nouvelle commande #{order_id}**\n\n"
+            f"📦 Service : {service_display}\n"
+            f"📋 Plan : {plan_display}\n"
+            f"👤 Client : @{query.from_user.username or 'Unknown'} (ID: {query.from_user.id})\n"
+            f"📝 Nom : {state['first_name']} {state['last_name']}\n"
+            f"💰 Prix : {price}€\n"
+            f"💵 Bénéfice : {profit:.2f}€\n"
+            f"💳 Paiement : {payment_method}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard = [
+            [InlineKeyboardButton("✋ Prendre en charge", callback_data=f'take_order_{order_id}')],
+            [InlineKeyboardButton("❌ Annuler la commande", callback_data=f'cancel_order_{order_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                sent_msg = await context.bot.send_message(chat_id=admin_id, text=admin_message, 
+                                               parse_mode='Markdown', reply_markup=reply_markup)
+                
+                conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                c2 = conn2.cursor()
+                c2.execute("INSERT INTO order_messages VALUES (?, ?, ?, ?)", 
+                         (order_id, admin_id, sent_msg.message_id, None))
+                conn2.commit()
+                conn2.close()
+                
+                print(f"✅ Commande #{order_id} enregistrée pour admin {admin_id}: msg={sent_msg.message_id}")
+            except Exception as e:
+                print(f"❌ Erreur envoi admin {admin_id}: {e}")
+        
+        del user_states[query.from_user.id]
 
-@app.route('/api/order/<int:order_i
+async def handle_message(update: Update, context):
+    user_id = update.effective_user.id
+    state = user_states.get(user_id)
+    
+    if not state:
+        return
+    
+    if state['state'] == 'waiting_firstname':
+        state['first_name'] = update.message.text.strip()
+        state['state'] = 'waiting_lastname'
+        await update.message.reply_text("📝 Entrez maintenant votre nom :")
+    
+    elif state['state'] == 'waiting_lastname':
+        state['last_name'] = update.message.text.strip()
+        state['state'] = 'waiting_payment'
+        
+        keyboard = [
+            [InlineKeyboardButton("💳 PayPal", callback_data='paypal')],
+            [InlineKeyboardButton("🏦 Virement", callback_data='virement')],
+            [InlineKeyboardButton("📱 Revolut", callback_data='revolut')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f"✅ Informations enregistrées :\n"
+            f"📝 {state['first_name']} {state['last_name']}\n\n"
+            f"💳 Choisissez votre mode de paiement :",
+            reply_markup=reply_markup
+        )
+
+async def run_telegram_bot():
+    print("🤖 Initialisation du bot Telegram...")
+    
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('help', help_command))
+    application.add_handler(CommandHandler('stats', stats))
+    application.add_handler(CommandHandler('encours', encours))
+    application.add_handler(CommandHandler('disponibles', disponibles))
+    application.add_handler(CommandHandler('historique', historique))
+    application.add_handler(CommandHandler('export', export))
+    application.add_handler(CommandHandler('broadcast', broadcast))
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(MessageHandler(filters.ALL, handle_message))
+    
+    force_kill_all_instances()
+    
+    print("🤖 Bot Telegram démarré en mode POLLING...")
+    
+    max_retries = 3
+    retry_delay = 15
+    
+    for attempt in range(max_retries):
+        try:
+            print(f"🔄 Tentative de connexion {attempt + 1}/{max_retries}...")
+            
+            await application.initialize()
+            await application.start()
+            
+            await application.updater.start_polling(
+                drop_pending_updates=True,
+                allowed_updates=Update.ALL_TYPES,
+                poll_interval=1.0,
+                timeout=10,
+                bootstrap_retries=-1,
+                read_timeout=10,
+                write_timeout=10,
+                connect_timeout=10,
+                pool_timeout=10
+            )
+            
+            print("✅ Bot Telegram connecté avec succès!")
+            
+            try:
+                await asyncio.Event().wait()
+            except (KeyboardInterrupt, SystemExit):
+                print("🛑 Arrêt du bot...")
+            finally:
+                print("🔄 Nettoyage en cours...")
+                await application.updater.stop()
+                await application.stop()
+                await application.shutdown()
+                print("✅ Bot arrêté proprement")
+            break
+            
+        except Exception as e:
+            error_msg = str(e)
+            if "Conflict" in error_msg:
+                print(f"⚠️ CONFLIT DÉTECTÉ (tentative {attempt + 1}/{max_retries})")
+                print(f"   Une autre instance du bot est probablement active.")
+                
+                if attempt < max_retries - 1:
+                    print(f"   ⏳ Attente de {retry_delay} secondes avant nouvelle tentative...")
+                    await asyncio.sleep(retry_delay)
+                    print(f"   🔥 Nettoyage forcé des instances...")
+                    force_kill_all_instances()
+                else:
+                    print("❌ Échec après toutes les tentatives.")
+                    print("💡 SOLUTION : Arrêtez toutes les autres instances du bot (Render, local, etc.)")
+                    raise
+            else:
+                print(f"❌ Erreur inattendue: {error_msg}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(5)
+                else:
+                    raise
+
+def start_telegram_bot():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(run_telegram_bot())
+    except Exception as e:
+        print(f"❌ Erreur bot Telegram: {e}")
+    finally:
+        loop.close()
+
+print("🚀 Lancement du bot Telegram en arrière-plan...")
+bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
+bot_thread.start()
+print("🌐 Flask prêt pour Gunicorn")
+
+if __name__ == '__main__':
+    port = int(os.getenv('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
+        
