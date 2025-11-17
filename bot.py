@@ -14,7 +14,7 @@ from functools import wraps
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 5174507979]
+ADMIN_IDS = [6976573567, 6193535472, 5174507979]
 WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 # Flask app
