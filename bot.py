@@ -1,17 +1,14 @@
 import os
 import threading
 import sqlite3
-import csv
 import time
 import asyncio
 from datetime import datetime
-from io import StringIO
 from flask import Flask, render_template_string, request, jsonify, redirect, session, send_from_directory
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 import requests
 from functools import wraps
-import json
 
 # Configuration
 BOT_TOKEN = os.getenv('BOT_TOKEN')
@@ -55,8 +52,7 @@ SERVICES_CONFIG = {
         'active': True,
         'plans': {
             '1_mois': {'label': '1 mois (sur ton mail)', 'price': 2.00, 'cost': 0.60},
-            'business': {'label': 'Business (+5 invitations)', 'price': 5.00, 'cost': 2.90},
-            '1_an': {'label': '1 an (nouveau compte) [INDISPONIBLE]', 'price': 18.00, 'cost': 5.00, 'available': False}
+            'business': {'label': 'Business (+5 invitations)', 'price': 5.00, 'cost': 2.90}
         }
     },
     'deezer': {
@@ -72,11 +68,6 @@ SERVICES_CONFIG = {
         'plans': {
             'abonnement': {'label': 'Abonnement Basic Fit', 'price': 6.00, 'cost': 1.00}
         }
-    },
-    'ubereats': {
-        'name': '🍔 Uber Eats',
-        'active': False,
-        'plans': {}
     }
 }
 
@@ -122,68 +113,10 @@ def init_db():
                   message_id INTEGER,
                   photo_message_id INTEGER)''')
     
-    columns_to_add = [
-        ("plan", "TEXT"),
-        ("cost", "REAL"),
-        ("status", "TEXT DEFAULT 'en_attente'"),
-        ("admin_id", "INTEGER"),
-        ("admin_username", "TEXT"),
-        ("taken_at", "TEXT"),
-        ("cancelled_by", "INTEGER"),
-        ("cancelled_at", "TEXT"),
-        ("cancel_reason", "TEXT"),
-        ("civilite", "TEXT"),
-        ("birthdate", "TEXT"),
-        ("phone", "TEXT"),
-        ("email", "TEXT"),
-        ("postal_code", "TEXT"),
-        ("street_number", "TEXT"),
-        ("street_name", "TEXT"),
-        ("city", "TEXT")
-    ]
-    
-    for column, col_type in columns_to_add:
-        try:
-            c.execute(f"ALTER TABLE orders ADD COLUMN {column} {col_type}")
-        except:
-            pass
-    
     conn.commit()
     conn.close()
 
 init_db()
-
-def force_kill_all_instances():
-    print("🔥 Forçage de la suppression de toutes les instances...")
-    try:
-        url = f"https://api.telegram.org/bot{BOT_TOKEN}/deleteWebhook?drop_pending_updates=true"
-        response = requests.get(url, timeout=10)
-        print(f"🔧 Webhook supprimé: {response.json()}")
-        time.sleep(3)
-        
-        print("⚡ Vidage des mises à jour en attente...")
-        for i in range(10):
-            try:
-                url2 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset=-1&timeout=1"
-                resp = requests.get(url2, timeout=5)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if data.get('result'):
-                        last_id = max([u['update_id'] for u in data['result']])
-                        url3 = f"https://api.telegram.org/bot{BOT_TOKEN}/getUpdates?offset={last_id+1}&timeout=1"
-                        requests.get(url3, timeout=5)
-                print(f"   Nettoyage {i+1}/10...")
-                time.sleep(1)
-            except Exception as e:
-                print(f"   Erreur nettoyage: {e}")
-                pass
-        
-        print("✅ Toutes les instances ont été forcées à se déconnecter")
-        time.sleep(5)
-        
-    except Exception as e:
-        print(f"⚠️ Erreur pendant le nettoyage: {e}")
-        time.sleep(3)
 
 # ============= PWA FILES =============
 
@@ -251,26 +184,6 @@ self.addEventListener('notificationclick', (event) => {
 });
 '''
 
-# ============= ROUTES PWA =============
-
-@app.route('/manifest.json')
-def manifest():
-    return jsonify(MANIFEST_JSON)
-
-@app.route('/sw.js')
-def service_worker():
-    return SERVICE_WORKER_JS, 200, {'Content-Type': 'application/javascript'}
-
-@app.route('/api/subscribe', methods=['POST'])
-@login_required
-def subscribe_push():
-    subscription = request.json
-    if subscription not in push_subscriptions:
-        push_subscriptions.append(subscription)
-    return jsonify({'success': True})
-
-# ============= INTERFACE WEB =============
-
 HTML_LOGIN = '''
 <!DOCTYPE html>
 <html lang="fr">
@@ -279,12 +192,11 @@ HTML_LOGIN = '''
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#0a2540">
     <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="/static/icon-192.png">
     <title>Connexion - B4U Deals Admin</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: linear-gradient(135deg, #0a2540 0%, #1a4d7a 100%);
             min-height: 100vh;
             display: flex;
@@ -306,26 +218,13 @@ HTML_LOGIN = '''
             margin-bottom: 30px;
             font-size: 28px;
         }
-        .form-group {
-            margin-bottom: 20px;
-        }
-        label {
-            display: block;
-            margin-bottom: 8px;
-            color: #333;
-            font-weight: 500;
-        }
         input {
             width: 100%;
             padding: 12px;
             border: 2px solid #e0e0e0;
             border-radius: 8px;
             font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        input:focus {
-            outline: none;
-            border-color: #00d4ff;
+            margin-bottom: 20px;
         }
         button {
             width: 100%;
@@ -337,10 +236,6 @@ HTML_LOGIN = '''
             font-size: 16px;
             font-weight: 600;
             cursor: pointer;
-            transition: transform 0.2s;
-        }
-        button:hover {
-            transform: translateY(-2px);
         }
         .error {
             background: #fee;
@@ -359,19 +254,10 @@ HTML_LOGIN = '''
         <div class="error">{{ error }}</div>
         {% endif %}
         <form method="POST">
-            <div class="form-group">
-                <label>Mot de passe</label>
-                <input type="password" name="password" required autofocus>
-            </div>
+            <input type="password" name="password" placeholder="Mot de passe" required autofocus>
             <button type="submit">Se connecter</button>
         </form>
     </div>
-    
-    <script>
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js');
-        }
-    </script>
 </body>
 </html>
 '''
@@ -381,23 +267,17 @@ HTML_DASHBOARD = '''
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="theme-color" content="#0a2540">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/manifest.json">
-    <link rel="apple-touch-icon" href="/static/icon-192.png">
-    <title>Dashboard Admin - B4U Deals</title>
+    <title>Dashboard - B4U Deals</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
-        
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background: #f5f7fa;
             color: #333;
-            -webkit-font-smoothing: antialiased;
         }
-        
         .header {
             background: linear-gradient(135deg, #0a2540 0%, #1a4d7a 100%);
             color: white;
@@ -406,71 +286,29 @@ HTML_DASHBOARD = '''
             position: sticky;
             top: 0;
             z-index: 100;
-        }
-        
-        .header-content {
-            max-width: 1400px;
-            margin: 0 auto;
             display: flex;
             justify-content: space-between;
             align-items: center;
         }
-        
-        .header h1 { 
-            font-size: 20px;
-        }
-        
-        .header-buttons {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-        
-        .notif-badge {
-            position: relative;
-            background: rgba(255,255,255,0.2);
-            padding: 8px 12px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 18px;
-        }
-        
-        .notif-badge.active::after {
-            content: '';
-            position: absolute;
-            top: 5px;
-            right: 5px;
-            width: 8px;
-            height: 8px;
-            background: #4caf50;
-            border-radius: 50%;
-        }
-        
         .logout-btn {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 8px 16px;
             border: none;
             border-radius: 8px;
-            cursor: pointer;
             text-decoration: none;
-            display: inline-block;
-            font-size: 14px;
         }
-        
         .container {
             max-width: 1400px;
             margin: 20px auto;
             padding: 0 15px;
         }
-        
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
             gap: 15px;
             margin-bottom: 20px;
         }
-        
         .stat-card {
             background: white;
             padding: 20px;
@@ -478,44 +316,28 @@ HTML_DASHBOARD = '''
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
             border-left: 4px solid #00d4ff;
         }
-        
         .stat-card h3 {
             color: #666;
             font-size: 12px;
             margin-bottom: 8px;
-            text-transform: uppercase;
         }
-        
         .stat-card .value {
             font-size: 24px;
             font-weight: bold;
             color: #0a2540;
         }
-        
         .orders-section {
             background: white;
             padding: 20px;
             border-radius: 15px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }
-        
-        .section-title {
-            font-size: 18px;
-            margin-bottom: 15px;
-            color: #333;
-            border-bottom: 2px solid #00d4ff;
-            padding-bottom: 8px;
-        }
-        
         .filters {
             display: flex;
             gap: 8px;
             margin-bottom: 15px;
             overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            padding-bottom: 5px;
         }
-        
         .filter-btn {
             padding: 8px 16px;
             border: 2px solid #00d4ff;
@@ -524,15 +346,11 @@ HTML_DASHBOARD = '''
             border-radius: 20px;
             cursor: pointer;
             font-size: 13px;
-            white-space: nowrap;
-            flex-shrink: 0;
         }
-        
         .filter-btn.active {
             background: #00d4ff;
             color: white;
         }
-        
         .order-card {
             background: #f9f9f9;
             padding: 15px;
@@ -540,62 +358,31 @@ HTML_DASHBOARD = '''
             margin-bottom: 12px;
             border-left: 4px solid #ddd;
         }
-        
         .order-card.en_attente { border-left-color: #ffa500; }
         .order-card.en_cours { border-left-color: #2196f3; }
         .order-card.terminee { border-left-color: #4caf50; }
         .order-card.annulee { border-left-color: #f44336; }
-        
         .order-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
+            margin-bottom: 10px;
         }
-        
-        .order-id {
-            font-weight: bold;
-            font-size: 16px;
-            color: #0a2540;
-        }
-        
         .status-badge {
             padding: 4px 10px;
             border-radius: 12px;
             font-size: 11px;
             font-weight: bold;
-            text-transform: uppercase;
         }
-        
         .status-badge.en_attente { background: #fff3cd; color: #856404; }
         .status-badge.en_cours { background: #d1ecf1; color: #0c5460; }
         .status-badge.terminee { background: #d4edda; color: #155724; }
         .status-badge.annulee { background: #f8d7da; color: #721c24; }
-        
-        .order-details {
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 8px;
-            margin-bottom: 12px;
-            font-size: 13px;
-        }
-        
-        .detail-item {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        
-        .detail-item strong {
-            color: #0a2540;
-        }
-        
         .order-actions {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            margin-top: 10px;
         }
-        
         .action-btn {
             padding: 8px 14px;
             border: none;
@@ -605,18 +392,10 @@ HTML_DASHBOARD = '''
             flex: 1;
             min-width: 100px;
         }
-        
         .btn-take { background: #2196f3; color: white; }
         .btn-complete { background: #4caf50; color: white; }
         .btn-cancel { background: #f44336; color: white; }
         .btn-release { background: #ff9800; color: white; }
-        
-        .empty-state {
-            text-align: center;
-            padding: 40px 20px;
-            color: #999;
-        }
-        
         .refresh-btn {
             position: fixed;
             bottom: 20px;
@@ -630,73 +409,31 @@ HTML_DASHBOARD = '''
             font-size: 20px;
             cursor: pointer;
             box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            z-index: 99;
-        }
-        
-        .install-prompt {
-            position: fixed;
-            bottom: 80px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #00d4ff;
-            color: white;
-            padding: 12px 20px;
-            border-radius: 25px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
-            display: none;
-            align-items: center;
-            gap: 10px;
-            z-index: 99;
-        }
-        
-        .install-prompt button {
-            background: white;
-            color: #0a2540;
-            border: none;
-            padding: 6px 12px;
-            border-radius: 15px;
-            font-weight: bold;
-            cursor: pointer;
-        }
-        
-        @media (min-width: 768px) {
-            .header h1 { font-size: 24px; }
-            .stats-grid { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-            .stat-card .value { font-size: 32px; }
-            .order-details { grid-template-columns: repeat(2, 1fr); }
-            .action-btn { flex: 0; }
         }
     </style>
 </head>
 <body>
     <div class="header">
-        <div class="header-content">
-            <h1>🎯 B4U Deals Admin</h1>
-            <div class="header-buttons">
-                <div class="notif-badge" id="notif-bell" onclick="requestNotificationPermission()">
-                    🔔
-                </div>
-                <a href="/logout" class="logout-btn">Déconnexion</a>
-            </div>
-        </div>
+        <h1>🎯 B4U Deals Admin</h1>
+        <a href="/logout" class="logout-btn">Déconnexion</a>
     </div>
 
     <div class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <h3>📦 Total</h3>
+                <h3>📦 TOTAL</h3>
                 <div class="value" id="total-orders">0</div>
             </div>
             <div class="stat-card">
-                <h3>⏳ Attente</h3>
+                <h3>⏳ ATTENTE</h3>
                 <div class="value" id="pending-orders">0</div>
             </div>
             <div class="stat-card">
-                <h3>🔄 Cours</h3>
+                <h3>🔄 COURS</h3>
                 <div class="value" id="inprogress-orders">0</div>
             </div>
             <div class="stat-card">
-                <h3>✅ Terminées</h3>
+                <h3>✅ TERMINÉES</h3>
                 <div class="value" id="completed-orders">0</div>
             </div>
             <div class="stat-card">
@@ -704,13 +441,13 @@ HTML_DASHBOARD = '''
                 <div class="value" id="revenue">0€</div>
             </div>
             <div class="stat-card">
-                <h3>💵 Bénéf</h3>
+                <h3>💵 BÉNÉF</h3>
                 <div class="value" id="profit">0€</div>
             </div>
         </div>
 
         <div class="orders-section">
-            <h2 class="section-title">📋 Commandes</h2>
+            <h2>📋 Commandes</h2>
             
             <div class="filters">
                 <button class="filter-btn active" onclick="filterOrders('all')">Toutes</button>
@@ -725,64 +462,14 @@ HTML_DASHBOARD = '''
     </div>
 
     <button class="refresh-btn" onclick="loadData()">🔄</button>
-    
-    <div class="install-prompt" id="install-prompt">
-        <span>📱 Installer l'app</span>
-        <button onclick="installApp()">Installer</button>
-        <button onclick="document.getElementById('install-prompt').style.display='none'">✕</button>
-    </div>
 
     <script>
         let currentFilter = 'all';
-        let lastOrderCount = 0;
-        let deferredPrompt;
-
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            document.getElementById('install-prompt').style.display = 'flex';
-        });
-
-        function installApp() {
-            if (deferredPrompt) {
-                deferredPrompt.prompt();
-                deferredPrompt.userChoice.then((choiceResult) => {
-                    deferredPrompt = null;
-                    document.getElementById('install-prompt').style.display = 'none';
-                });
-            }
-        }
-
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('/sw.js').then((registration) => {
-                console.log('Service Worker enregistré');
-            });
-        }
-
-        async function requestNotificationPermission() {
-            if ('Notification' in window) {
-                const permission = await Notification.requestPermission();
-                if (permission === 'granted') {
-                    document.getElementById('notif-bell').classList.add('active');
-                    alert('✅ Notifications activées !');
-                }
-            }
-        }
-
-        if ('Notification' in window && Notification.permission === 'granted') {
-            document.getElementById('notif-bell').classList.add('active');
-        }
 
         async function loadData() {
             try {
                 const response = await fetch('/api/dashboard');
                 const data = await response.json();
-                
-                if (lastOrderCount > 0 && data.stats.total_orders > lastOrderCount) {
-                    showNotification('Nouvelle commande !', `${data.stats.total_orders - lastOrderCount} nouvelle(s) commande(s)`);
-                    playNotificationSound();
-                }
-                lastOrderCount = data.stats.total_orders;
                 
                 document.getElementById('total-orders').textContent = data.stats.total_orders;
                 document.getElementById('pending-orders').textContent = data.stats.pending_orders;
@@ -797,22 +484,6 @@ HTML_DASHBOARD = '''
             }
         }
 
-        function showNotification(title, body) {
-            if ('Notification' in window && Notification.permission === 'granted') {
-                new Notification(title, {
-                    body: body,
-                    icon: '/static/icon-192.png',
-                    badge: '/static/icon-192.png',
-                    vibrate: [200, 100, 200]
-                });
-            }
-        }
-
-        function playNotificationSound() {
-            const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBTGH0fPTgjMGHm7A7+OZWRQJ');
-            audio.play().catch(e => console.log('Erreur son:', e));
-        }
-
         function displayOrders(orders) {
             const container = document.getElementById('orders-container');
             
@@ -821,7 +492,7 @@ HTML_DASHBOARD = '''
                 : orders.filter(o => o.status === currentFilter);
             
             if (filtered.length === 0) {
-                container.innerHTML = '<div class="empty-state"><h3>Aucune commande</h3></div>';
+                container.innerHTML = '<p style="text-align:center;padding:40px;color:#999">Aucune commande</p>';
                 return;
             }
             
@@ -841,27 +512,21 @@ HTML_DASHBOARD = '''
                     `;
                 } else if (order.status === 'en_cours') {
                     actions = `
-                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ OK</button>
-                        <button class="action-btn btn-release" onclick="releaseOrder(${order.id})">🔄</button>
-                        <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌</button>
+                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ Terminer</button>
+                        <button class="action-btn btn-release" onclick="releaseOrder(${order.id})">🔄 Remettre</button>
                     `;
                 }
-                
-                const details = `
-                    <div class="detail-item">📦 <strong>${order.service}</strong></div>
-                    ${order.plan ? `<div class="detail-item">📋 <strong>${order.plan}</strong></div>` : ''}
-                    <div class="detail-item">👤 <strong>@${order.username}</strong></div>
-                    <div class="detail-item">💰 <strong>${order.price}€</strong></div>
-                `;
                 
                 return `
                     <div class="order-card ${order.status}">
                         <div class="order-header">
-                            <div class="order-id">#${order.id}</div>
-                            <div class="status-badge ${order.status}">${statusText[order.status]}</div>
+                            <strong>#${order.id}</strong>
+                            <span class="status-badge ${order.status}">${statusText[order.status]}</span>
                         </div>
-                        <div class="order-details">
-                            ${details}
+                        <div>
+                            <div>📦 ${order.service} ${order.plan ? '- ' + order.plan : ''}</div>
+                            <div>👤 @${order.username}</div>
+                            <div>💰 ${order.price}€</div>
                         </div>
                         <div class="order-actions">
                             ${actions}
@@ -873,55 +538,346 @@ HTML_DASHBOARD = '''
 
         function filterOrders(filter) {
             currentFilter = filter;
-            document.querySelectorAll('.filter-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
+            document.querySelectorAll('.filter-btn').forEach(btn => btn.classList.remove('active'));
             event.target.classList.add('active');
             loadData();
         }
 
         async function takeOrder(orderId) {
             if (!confirm('Prendre en charge cette commande ?')) return;
-            try {
-                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
-                loadData();
-            } catch (error) {
-                alert('Erreur: ' + error);
-            }
+            await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+            loadData();
         }
 
         async function completeOrder(orderId) {
-            if (!confirm('Marquer cette commande comme terminée ?')) return;
-            try {
-                await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
-                loadData();
-            } catch (error) {
-                alert('Erreur: ' + error);
-            }
+            if (!confirm('Marquer comme terminée ?')) return;
+            await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
+            loadData();
         }
 
         async function cancelOrder(orderId) {
             if (!confirm('Annuler cette commande ?')) return;
-            try {
-                await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
-                loadData();
-            } catch (error) {
-                alert('Erreur: ' + error);
-            }
+            await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
+            loadData();
         }
 
         async function releaseOrder(orderId) {
-            if (!confirm('Remettre cette commande en ligne ?')) return;
-            try {
-                await fetch(`/api/order/${orderId}/release`, { method: 'POST' });
-                loadData();
-            } catch (error) {
-                alert('Erreur: ' + error);
-            }
+            if (!confirm('Remettre en ligne ?')) return;
+            await fetch(`/api/order/${orderId}/release`, { method: 'POST' });
+            loadData();
         }
 
         loadData();
         setInterval(loadData, 10000);
     </script>
 </body>
-</html
+</html>
+'''
+
+# ============= ROUTES WEB =============
+
+@app.route('/manifest.json')
+def manifest():
+    return jsonify(MANIFEST_JSON)
+
+@app.route('/sw.js')
+def service_worker():
+    return SERVICE_WORKER_JS, 200, {'Content-Type': 'application/javascript'}
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        if request.form.get('password') == WEB_PASSWORD:
+            session['logged_in'] = True
+            return redirect('/dashboard')
+        return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
+    return render_template_string(HTML_LOGIN)
+
+@app.route('/logout')
+def logout():
+    session.pop('logged_in', None)
+    return redirect('/login')
+
+@app.route('/dashboard')
+@login_required
+def dashboard():
+    return render_template_string(HTML_DASHBOARD)
+
+@app.route('/api/dashboard')
+@login_required
+def api_dashboard():
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    
+    c.execute("SELECT * FROM orders ORDER BY id DESC")
+    orders = []
+    for row in c.fetchall():
+        orders.append({
+            'id': row[0],
+            'user_id': row[1],
+            'username': row[2],
+            'service': row[3],
+            'plan': row[4],
+            'price': row[6],
+            'cost': row[7],
+            'status': row[13],
+            'timestamp': row[12]
+        })
+    
+    c.execute("SELECT COUNT(*) FROM orders")
+    total = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
+    pending = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_cours'")
+    inprogress = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
+    completed = c.fetchone()[0]
+    
+    c.execute("SELECT COALESCE(SUM(price), 0) FROM orders WHERE status='terminee'")
+    revenue = c.fetchone()[0]
+    
+    c.execute("SELECT COALESCE(SUM(price - cost), 0) FROM orders WHERE status='terminee'")
+    profit = c.fetchone()[0]
+    
+    conn.close()
+    
+    return jsonify({
+        'orders': orders,
+        'stats': {
+            'total_orders': total,
+            'pending_orders': pending,
+            'inprogress_orders': inprogress,
+            'completed_orders': completed,
+            'revenue': revenue,
+            'profit': profit
+        }
+    })
+
+@app.route('/api/order/<int:order_id>/take', methods=['POST'])
+@login_required
+def take_order(order_id):
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='en_cours', taken_at=? WHERE id=?", 
+              (datetime.now().isoformat(), order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/complete', methods=['POST'])
+@login_required
+def complete_order(order_id):
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
+@login_required
+def cancel_order(order_id):
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='annulee', cancelled_at=? WHERE id=?",
+              (datetime.now().isoformat(), order_id))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/release', methods=['POST'])
+@login_required
+def release_order(order_id):
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='en_attente' WHERE id=?", (order_id,))
+    conn.commit()
+    conn.close()
+    return jsonify({'success': True})
+
+@app.route('/')
+def index():
+    return redirect('/dashboard')
+
+# ============= BOT TELEGRAM =============
+
+async def start(update: Update, context):
+    keyboard = []
+    for service_key, service_data in SERVICES_CONFIG.items():
+        if service_data['active']:
+            keyboard.append([InlineKeyboardButton(service_data['name'], callback_data=f"service_{service_key}")])
+    
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await update.message.reply_text(
+        "🎯 *Bienvenue sur B4U Deals !*\n\n"
+        "Choisis ton service :",
+        parse_mode='Markdown',
+        reply_markup=reply_markup
+    )
+
+async def button_callback(update: Update, context):
+    query = update.callback_query
+    await query.answer()
+    
+    data = query.data
+    user_id = query.from_user.id
+    
+    if data.startswith("service_"):
+        service_key = data.replace("service_", "")
+        service = SERVICES_CONFIG[service_key]
+        
+        keyboard = []
+        for plan_key, plan_data in service['plans'].items():
+            if plan_data.get('available', True):
+                keyboard.append([InlineKeyboardButton(
+                    f"{plan_data['label']} - {plan_data['price']}€",
+                    callback_data=f"plan_{service_key}_{plan_key}"
+                )])
+        
+        keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data="back_to_services")])
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"*{service['name']}*\n\nChoisis ton plan :",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    
+    elif data.startswith("plan_"):
+        parts = data.replace("plan_", "").split("_")
+        service_key = parts[0]
+        plan_key = "_".join(parts[1:])
+        
+        service = SERVICES_CONFIG[service_key]
+        plan = service['plans'][plan_key]
+        
+        user_states[user_id] = {
+            'service': service_key,
+            'plan': plan_key,
+            'service_name': service['name'],
+            'plan_label': plan['label'],
+            'price': plan['price'],
+            'cost': plan['cost'],
+            'step': 'waiting_payment'
+        }
+        
+        await query.edit_message_text(
+            f"✅ *Commande confirmée*\n\n"
+            f"Service: {service['name']}\n"
+            f"Plan: {plan['label']}\n"
+            f"Prix: {plan['price']}€\n\n"
+            f"📸 Envoie maintenant une capture d'écran de ton paiement.",
+            parse_mode='Markdown'
+        )
+    
+    elif data == "back_to_services":
+        keyboard = []
+        for service_key, service_data in SERVICES_CONFIG.items():
+            if service_data['active']:
+                keyboard.append([InlineKeyboardButton(service_data['name'], callback_data=f"service_{service_key}")])
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(
+            "🎯 *B4U Deals*\n\nChoisis ton service :",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+
+async def handle_photo(update: Update, context):
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or "Inconnu"
+    
+    if user_id not in user_states or user_states[user_id].get('step') != 'waiting_payment':
+        await update.message.reply_text("❌ Commande non trouvée. Utilise /start pour recommencer.")
+        return
+    
+    state = user_states[user_id]
+    photo_id = update.message.photo[-1].file_id
+    
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute("""INSERT INTO orders 
+                 (user_id, username, service, plan, photo_id, price, cost, timestamp, status)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en_attente')""",
+              (user_id, username, state['service_name'], state['plan_label'], 
+               photo_id, state['price'], state['cost'], datetime.now().isoformat()))
+    
+    order_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    
+    # Notifier les admins
+    for admin_id in ADMIN_IDS:
+        try:
+            await context.bot.send_message(
+                chat_id=admin_id,
+                text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
+                     f"👤 Client: @{username}\n"
+                     f"📦 Service: {state['service_name']}\n"
+                     f"📋 Plan: {state['plan_label']}\n"
+                     f"💰 Prix: {state['price']}€\n"
+                     f"💵 Coût: {state['cost']}€\n"
+                     f"📈 Bénéfice: {state['price'] - state['cost']}€",
+                parse_mode='Markdown'
+            )
+            await context.bot.send_photo(
+                chat_id=admin_id,
+                photo=photo_id,
+                caption=f"Preuve de paiement - Commande #{order_id}"
+            )
+        except Exception as e:
+            print(f"Erreur notification admin {admin_id}: {e}")
+    
+    await update.message.reply_text(
+        f"✅ *Commande #{order_id} enregistrée !*\n\n"
+        f"Ton paiement est en cours de vérification.\n"
+        f"Tu seras notifié dès que ta commande sera traitée.\n\n"
+        f"Merci de ta confiance ! 🙏",
+        parse_mode='Markdown'
+    )
+    
+    del user_states[user_id]
+
+async def handle_message(update: Update, context):
+    await update.message.reply_text(
+        "Utilise /start pour commencer une commande ! 🎯"
+    )
+
+def run_bot():
+    """Lance le bot Telegram"""
+    try:
+        print("🤖 Démarrage du bot Telegram...")
+        application = ApplicationBuilder().token(BOT_TOKEN).build()
+        
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(CallbackQueryHandler(button_callback))
+        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        print("✅ Bot Telegram prêt !")
+        application.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        print(f"❌ Erreur bot: {e}")
+
+def run_flask():
+    """Lance le serveur Flask"""
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🌐 Démarrage Flask sur le port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False)
+
+if __name__ == '__main__':
+    print("=" * 50)
+    print("🚀 B4U DEALS BOT - DÉMARRAGE")
+    print("=" * 50)
+    
+    # Lancer Flask dans un thread séparé
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    # Lancer le bot Telegram
+    time.sleep(2)
+    run_bot()
