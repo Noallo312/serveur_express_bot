@@ -56,7 +56,7 @@ SERVICES_CONFIG = {
         'plans': {
             '1_mois': {'label': '1 mois (sur ton mail)', 'price': 2.00, 'cost': 0.60},
             'business': {'label': 'Business (+5 invitations)', 'price': 5.00, 'cost': 2.90},
-            '1_an': {'label': '1 an (nouveau compte)', 'price': 18.00, 'cost': 5.00}
+            '1_an': {'label': '1 an (nouveau compte) [INDISPONIBLE]', 'price': 18.00, 'cost': 5.00, 'available': False}
         }
     },
     'deezer': {
@@ -64,6 +64,13 @@ SERVICES_CONFIG = {
         'active': True,
         'plans': {
             'premium': {'label': 'Premium', 'price': 6.00, 'cost': 0.00}
+        }
+    },
+    'basicfit': {
+        'name': '🏋️ Basic Fit',
+        'active': True,
+        'plans': {
+            'abonnement': {'label': 'Abonnement Basic Fit', 'price': 6.00, 'cost': 1.00}
         }
     },
     'ubereats': {
@@ -124,7 +131,15 @@ def init_db():
         ("taken_at", "TEXT"),
         ("cancelled_by", "INTEGER"),
         ("cancelled_at", "TEXT"),
-        ("cancel_reason", "TEXT")
+        ("cancel_reason", "TEXT"),
+        ("civilite", "TEXT"),
+        ("birthdate", "TEXT"),
+        ("phone", "TEXT"),
+        ("email", "TEXT"),
+        ("postal_code", "TEXT"),
+        ("street_number", "TEXT"),
+        ("street_name", "TEXT"),
+        ("city", "TEXT")
     ]
     
     for column, col_type in columns_to_add:
@@ -173,13 +188,13 @@ def force_kill_all_instances():
 # ============= PWA FILES =============
 
 MANIFEST_JSON = {
-    "name": "Serveur Express Admin",
-    "short_name": "SE Admin",
-    "description": "Dashboard administrateur Serveur Express Bot",
+    "name": "B4U Deals Admin",
+    "short_name": "B4U Admin",
+    "description": "Dashboard administrateur B4U Deals Bot",
     "start_url": "/dashboard",
     "display": "standalone",
-    "background_color": "#667eea",
-    "theme_color": "#667eea",
+    "background_color": "#0a2540",
+    "theme_color": "#0a2540",
     "orientation": "portrait-primary",
     "icons": [
         {
@@ -262,15 +277,15 @@ HTML_LOGIN = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="theme-color" content="#667eea">
+    <meta name="theme-color" content="#0a2540">
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
-    <title>Connexion - Admin Bot</title>
+    <title>Connexion - B4U Deals Admin</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0a2540 0%, #1a4d7a 100%);
             min-height: 100vh;
             display: flex;
             justify-content: center;
@@ -287,7 +302,7 @@ HTML_LOGIN = '''
         }
         h1 {
             text-align: center;
-            color: #667eea;
+            color: #0a2540;
             margin-bottom: 30px;
             font-size: 28px;
         }
@@ -310,12 +325,12 @@ HTML_LOGIN = '''
         }
         input:focus {
             outline: none;
-            border-color: #667eea;
+            border-color: #00d4ff;
         }
         button {
             width: 100%;
             padding: 14px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #00d4ff 0%, #0a2540 100%);
             color: white;
             border: none;
             border-radius: 8px;
@@ -339,7 +354,7 @@ HTML_LOGIN = '''
 </head>
 <body>
     <div class="login-container">
-        <h1>🔐 Connexion Admin</h1>
+        <h1>🔐 B4U Deals Admin</h1>
         {% if error %}
         <div class="error">{{ error }}</div>
         {% endif %}
@@ -367,12 +382,12 @@ HTML_DASHBOARD = '''
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <meta name="theme-color" content="#667eea">
+    <meta name="theme-color" content="#0a2540">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <link rel="manifest" href="/manifest.json">
     <link rel="apple-touch-icon" href="/static/icon-192.png">
-    <title>Dashboard Admin - Serveur Express Bot</title>
+    <title>Dashboard Admin - B4U Deals</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         
@@ -384,7 +399,7 @@ HTML_DASHBOARD = '''
         }
         
         .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, #0a2540 0%, #1a4d7a 100%);
             color: white;
             padding: 15px 20px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.1);
@@ -461,7 +476,7 @@ HTML_DASHBOARD = '''
             padding: 20px;
             border-radius: 15px;
             box-shadow: 0 2px 10px rgba(0,0,0,0.05);
-            border-left: 4px solid #667eea;
+            border-left: 4px solid #00d4ff;
         }
         
         .stat-card h3 {
@@ -474,7 +489,7 @@ HTML_DASHBOARD = '''
         .stat-card .value {
             font-size: 24px;
             font-weight: bold;
-            color: #667eea;
+            color: #0a2540;
         }
         
         .orders-section {
@@ -488,7 +503,7 @@ HTML_DASHBOARD = '''
             font-size: 18px;
             margin-bottom: 15px;
             color: #333;
-            border-bottom: 2px solid #667eea;
+            border-bottom: 2px solid #00d4ff;
             padding-bottom: 8px;
         }
         
@@ -503,9 +518,9 @@ HTML_DASHBOARD = '''
         
         .filter-btn {
             padding: 8px 16px;
-            border: 2px solid #667eea;
+            border: 2px solid #00d4ff;
             background: white;
-            color: #667eea;
+            color: #0a2540;
             border-radius: 20px;
             cursor: pointer;
             font-size: 13px;
@@ -514,7 +529,7 @@ HTML_DASHBOARD = '''
         }
         
         .filter-btn.active {
-            background: #667eea;
+            background: #00d4ff;
             color: white;
         }
         
@@ -541,7 +556,7 @@ HTML_DASHBOARD = '''
         .order-id {
             font-weight: bold;
             font-size: 16px;
-            color: #667eea;
+            color: #0a2540;
         }
         
         .status-badge {
@@ -572,7 +587,7 @@ HTML_DASHBOARD = '''
         }
         
         .detail-item strong {
-            color: #667eea;
+            color: #0a2540;
         }
         
         .order-actions {
@@ -609,7 +624,7 @@ HTML_DASHBOARD = '''
             width: 50px;
             height: 50px;
             border-radius: 50%;
-            background: #667eea;
+            background: #00d4ff;
             color: white;
             border: none;
             font-size: 20px;
@@ -623,7 +638,7 @@ HTML_DASHBOARD = '''
             bottom: 80px;
             left: 50%;
             transform: translateX(-50%);
-            background: #667eea;
+            background: #00d4ff;
             color: white;
             padding: 12px 20px;
             border-radius: 25px;
@@ -636,7 +651,7 @@ HTML_DASHBOARD = '''
         
         .install-prompt button {
             background: white;
-            color: #667eea;
+            color: #0a2540;
             border: none;
             padding: 6px 12px;
             border-radius: 15px;
@@ -656,7 +671,7 @@ HTML_DASHBOARD = '''
 <body>
     <div class="header">
         <div class="header-content">
-            <h1>🤖 SE Admin</h1>
+            <h1>🎯 B4U Deals Admin</h1>
             <div class="header-buttons">
                 <div class="notif-badge" id="notif-bell" onclick="requestNotificationPermission()">
                     🔔
@@ -722,7 +737,6 @@ HTML_DASHBOARD = '''
         let lastOrderCount = 0;
         let deferredPrompt;
 
-        // PWA Installation
         window.addEventListener('beforeinstallprompt', (e) => {
             e.preventDefault();
             deferredPrompt = e;
@@ -739,7 +753,6 @@ HTML_DASHBOARD = '''
             }
         }
 
-        // Service Worker & Notifications
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').then((registration) => {
                 console.log('Service Worker enregistré');
@@ -756,7 +769,6 @@ HTML_DASHBOARD = '''
             }
         }
 
-        // Check notification permission on load
         if ('Notification' in window && Notification.permission === 'granted') {
             document.getElementById('notif-bell').classList.add('active');
         }
@@ -766,7 +778,6 @@ HTML_DASHBOARD = '''
                 const response = await fetch('/api/dashboard');
                 const data = await response.json();
                 
-                // Check for new orders
                 if (lastOrderCount > 0 && data.stats.total_orders > lastOrderCount) {
                     showNotification('Nouvelle commande !', `${data.stats.total_orders - lastOrderCount} nouvelle(s) commande(s)`);
                     playNotificationSound();
@@ -913,278 +924,4 @@ HTML_DASHBOARD = '''
         setInterval(loadData, 10000);
     </script>
 </body>
-</html>
-'''
-
-@app.route('/')
-def home():
-    return "Bot Telegram actif !"
-
-@app.route('/health')
-def health():
-    return "OK", 200
-
-@app.route('/login', methods=['GET', 'POST'])
-def login():
-    if request.method == 'POST':
-        password = request.form.get('password')
-        if password == WEB_PASSWORD:
-            session['logged_in'] = True
-            return redirect('/dashboard')
-        return render_template_string(HTML_LOGIN, error="Mot de passe incorrect")
-    return render_template_string(HTML_LOGIN)
-
-@app.route('/logout')
-def logout():
-    session.pop('logged_in', None)
-    return redirect('/login')
-
-@app.route('/dashboard')
-@login_required
-def dashboard():
-    return render_template_string(HTML_DASHBOARD)
-
-@app.route('/api/dashboard')
-@login_required
-def api_dashboard():
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status != 'annulee'")
-    total_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
-    pending_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_cours'")
-    inprogress_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
-    completed_orders = c.fetchone()[0]
-    
-    c.execute("SELECT SUM(price) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
-    revenue = c.fetchone()[0] or 0
-    
-    c.execute("SELECT SUM(price - COALESCE(cost, 0)) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
-    profit = c.fetchone()[0] or 0
-    
-    c.execute("""SELECT id, user_id, username, service, plan, price, cost, first_name, last_name,
-                        payment_method, timestamp, status, admin_username
-                 FROM orders ORDER BY id DESC LIMIT 50""")
-    orders = c.fetchall()
-    conn.close()
-    
-    orders_list = [{
-        'id': o[0],
-        'user_id': o[1],
-        'username': o[2] or 'Unknown',
-        'service': o[3],
-        'plan': o[4],
-        'price': o[5],
-        'profit': (o[5] - o[6]) if o[6] is not None else None,
-        'first_name': o[7],
-        'last_name': o[8],
-        'payment_method': o[9],
-        'timestamp': o[10],
-        'status': o[11],
-        'admin_username': o[12]
-    } for o in orders]
-    
-    return jsonify({
-        'stats': {
-            'total_orders': total_orders,
-            'pending_orders': pending_orders,
-            'inprogress_orders': inprogress_orders,
-            'completed_orders': completed_orders,
-            'revenue': revenue,
-            'profit': profit
-        },
-        'orders': orders_list
-    })
-
-@app.route('/api/order/<int:order_id>/take', methods=['POST'])
-@login_required
-def api_take_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status='en_cours', admin_id=999999, admin_username='web_admin', taken_at=? WHERE id=?",
-              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-@app.route('/api/order/<int:order_id>/complete', methods=['POST'])
-@login_required
-def api_complete_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-@app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
-@login_required
-def api_cancel_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status='annulee', cancelled_by=999999, cancelled_at=?, cancel_reason='Annulée via web' WHERE id=?",
-              (datetime.now().strftime('%Y-%m-%d %H:%M:%S'), order_id))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-@app.route('/api/order/<int:order_id>/release', methods=['POST'])
-@login_required
-def api_release_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL WHERE id=?", (order_id,))
-    conn.commit()
-    conn.close()
-    return jsonify({'success': True})
-
-# ============= CODE TELEGRAM (reste inchangé) =============
-
-async def start(update: Update, context):
-    keyboard = []
-    
-    for service_key, service_info in SERVICES_CONFIG.items():
-        if service_info['active']:
-            keyboard.append([InlineKeyboardButton(service_info['name'], callback_data=f'service_{service_key}')])
-        else:
-            keyboard.append([InlineKeyboardButton(f"{service_info['name']} (Indisponible)", callback_data=f'inactive_{service_key}')])
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.message.reply_text(
-        "👋 Bienvenue sur Serveur Express Bot\n\n"
-        "🎯 Choisissez le service que vous souhaitez :",
-        reply_markup=reply_markup
-    )
-
-async def help_command(update: Update, context):
-    user_id = update.effective_user.id
-    
-    if user_id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Cette commande est réservée aux administrateurs.")
-        return
-    
-    message = (
-        "📋 **COMMANDES ADMINISTRATEUR**\n\n"
-        "/stats - Afficher les statistiques complètes\n"
-        "/disponibles - Voir les commandes disponibles\n"
-        "/encours - Voir les commandes en cours\n"
-        "/historique - Voir les 10 dernières commandes\n"
-        "/export - Exporter toutes les commandes en CSV\n"
-        "/broadcast [message] - Envoyer un message à tous les clients\n\n"
-        "🔔 **Services disponibles :**\n"
-        "• Crunchyroll 🧡\n"
-        "• YouTube Premium ▶️\n"
-        "• Spotify Premium 🎧\n"
-        "• ChatGPT+ 🤖\n"
-        "• Deezer Premium 🎵\n\n"
-        "🌐 **Interface Web :** Accessible sur votre URL/dashboard"
-    )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
-
-async def stats(update: Update, context):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Accès refusé.")
-        return
-    
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    
-    c.execute("SELECT COUNT(DISTINCT user_id) FROM orders")
-    total_clients = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status != 'annulee'")
-    total_orders = c.fetchone()[0]
-    
-    c.execute("SELECT SUM(price) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
-    total_revenue = c.fetchone()[0] or 0
-    
-    c.execute("SELECT SUM(price - COALESCE(cost, 0)) FROM orders WHERE price IS NOT NULL AND status != 'annulee'")
-    total_profit = c.fetchone()[0] or 0
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_attente'")
-    pending_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='en_cours'")
-    in_progress_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
-    completed_orders = c.fetchone()[0]
-    
-    c.execute("SELECT COUNT(*) FROM orders WHERE status='annulee'")
-    cancelled_orders = c.fetchone()[0]
-    
-    conn.close()
-    
-    await update.message.reply_text(
-        f"📊 **Statistiques Serveur Express**\n\n"
-        f"👥 Nombre de clients : {total_clients}\n"
-        f"📦 Nombre de commandes : {total_orders}\n\n"
-        f"📋 Statuts :\n"
-        f"⏳ En attente : {pending_orders}\n"
-        f"🔄 En cours (OCCUPÉ) : {in_progress_orders}\n"
-        f"✅ Terminées : {completed_orders}\n"
-        f"❌ Annulées : {cancelled_orders}\n\n"
-        f"💰 Chiffre d'affaires : {total_revenue:.2f}€\n"
-        f"💵 Bénéfices totaux : {total_profit:.2f}€",
-        parse_mode='Markdown'
-    )
-
-# ... (le reste du code Telegram reste identique)
-
-async def run_telegram_bot():
-    print("🤖 Initialisation du bot Telegram...")
-    
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
-    
-    application.add_handler(CommandHandler('start', start))
-    application.add_handler(CommandHandler('help', help_command))
-    application.add_handler(CommandHandler('stats', stats))
-    
-    force_kill_all_instances()
-    
-    print("🤖 Bot Telegram démarré en mode POLLING...")
-    
-    await application.initialize()
-    await application.start()
-    
-    await application.updater.start_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
-    )
-    
-    print("✅ Bot Telegram connecté avec succès!")
-    
-    try:
-        await asyncio.Event().wait()
-    except (KeyboardInterrupt, SystemExit):
-        print("🛑 Arrêt du bot...")
-    finally:
-        await application.updater.stop()
-        await application.stop()
-        await application.shutdown()
-
-def start_telegram_bot():
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(run_telegram_bot())
-    except Exception as e:
-        print(f"❌ Erreur bot Telegram: {e}")
-    finally:
-        loop.close()
-
-print("🚀 Lancement du bot Telegram en arrière-plan...")
-bot_thread = threading.Thread(target=start_telegram_bot, daemon=True)
-bot_thread.start()
-print("🌐 Flask prêt pour Gunicorn")
-
-if __name__ == '__main__':
-    port = int(os.getenv('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+</html
