@@ -869,6 +869,10 @@ def run_flask():
     print(f"🌐 Démarrage Flask sur le port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
 
+# Lancer le bot Telegram dans un thread séparé au démarrage
+bot_thread = threading.Thread(target=run_bot, daemon=True)
+bot_thread.start()
+
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 B4U DEALS BOT - DÉMARRAGE")
