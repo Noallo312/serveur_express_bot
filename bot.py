@@ -966,40 +966,48 @@ async def handle_message(update: Update, context):
         "Utilise /start pour commencer une commande ! 🎯"
     )
 
-def run_bot():
-    """Lance le bot Telegram"""
+application = None
+
+async def setup_bot():
+    """Configure le bot Telegram"""
+    global application
+    print("🤖 Configuration du bot Telegram...")
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Ajouter les handlers
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    
+    print("✅ Bot Telegram configuré !")
+    await application.initialize()
+
+def run_bot_polling():
+    """Lance le polling du bot Telegram"""
     try:
-        print("🤖 Démarrage du bot Telegram...")
-        application = ApplicationBuilder().token(BOT_TOKEN).build()
-        
-        # Ajouter les handlers
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button_callback))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-        
-        print("✅ Bot Telegram prêt !")
-        application.run_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(setup_bot())
+        print("🔄 Démarrage du polling Telegram...")
+        loop.run_until_complete(application.start())
+        loop.run_until_complete(application.updater.start_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES))
     except Exception as e:
         print(f"❌ Erreur bot: {e}")
         import traceback
         traceback.print_exc()
-
-def run_flask():
-    """Lance le serveur Flask"""
-    port = int(os.environ.get('PORT', 5000))
-    print(f"🌐 Démarrage Flask sur le port {port}...")
-    app.run(host='0.0.0.0', port=port, debug=False)
 
 if __name__ == '__main__':
     print("=" * 50)
     print("🚀 B4U DEALS BOT - DÉMARRAGE")
     print("=" * 50)
     
-    # Lancer Flask dans un thread séparé
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
+    # Lancer le bot dans un thread séparé
+    bot_thread = threading.Thread(target=run_bot_polling, daemon=True)
+    bot_thread.start()
     
-    # Lancer le bot Telegram
-    time.sleep(2)
-    run_bot()
+    # Lancer Flask
+    time.sleep(3)
+    port = int(os.environ.get('PORT', 5000))
+    print(f"🌐 Démarrage Flask sur le port {port}...")
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
