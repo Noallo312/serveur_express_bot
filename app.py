@@ -1,20 +1,22 @@
 import os
-import threading
 import sqlite3
-import time
-import asyncio
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, redirect, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from functools import wraps
+import asyncio
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 5174507979]
 WEB_PASSWORD = os.getenv('WEB_PASSWORD')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', 'https://serveur-express-bot-1.onrender.com')
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
+
+# Variable globale pour l'application Telegram
+telegram_app = None
 
 SERVICES_CONFIG = {
     'deezer': {
@@ -469,9 +471,24 @@ def cancel_order(order_id):
 def index():
     return redirect('/dashboard')
 
-# ========== TELEGRAM BOT ==========
+# ========== TELEGRAM BOT WEBHOOK ==========
 
-async def start(update: Update, context):
+@app.route('/telegram_webhook', methods=['POST'])
+async def telegram_webhook():
+    """Endpoint pour recevoir les updates de Telegram via webhook"""
+    global telegram_app
+    if telegram_app is None:
+        return jsonify({'error': 'Bot not initialized'}), 500
+    
+    try:
+        update = Update.de_json(request.get_json(), telegram_app.bot)
+        await telegram_app.process_update(update)
+        return jsonify({'ok': True})
+    except Exception as e:
+        print(f"❌ Erreur webhook: {e}")
+        return jsonify({'error': str(e)}), 500
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"[DEBUG] /start appelé par {update.message.from_user.id}")
     keyboard = []
     for service_key, service_data in SERVICES_CONFIG.items():
@@ -480,7 +497,7 @@ async def start(update: Update, context):
     reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text("🎯 *Bienvenue sur B4U Deals !*\n\nChoisis ton service :", parse_mode='Markdown', reply_markup=reply_markup)
 
-async def button_callback(update: Update, context):
+async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     data = query.data
@@ -538,7 +555,7 @@ async def button_callback(update: Update, context):
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text("🎯 *B4U Deals*\n\nChoisis ton service :", parse_mode='Markdown', reply_markup=reply_markup)
 
-async def handle_text_message(update: Update, context):
+async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "Inconnu"
     text = update.message.text
@@ -578,7 +595,7 @@ async def handle_text_message(update: Update, context):
         })
         await update.message.reply_text(f"✅ Infos reçues\n\n💳 Envoie une capture d'écran de ton paiement")
 
-async def handle_photo(update: Update, context):
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "Inconnu"
     
@@ -623,24 +640,24 @@ async def handle_photo(update: Update, context):
     await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
     del user_states[user_id]
 
-def run_bot():
-    try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        print("🤖 Configuration du bot Telegram...")
-        application = ApplicationBuilder().token(BOT_TOKEN).build()
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button_callback))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-        print("✅ Bot Telegram configuré !")
-        loop.run_until_complete(application.initialize())
-        loop.run_until_complete(application.start())
-        loop.run_until_complete(application.updater.start_polling(drop_pending_updates=False))
-    except Exception as e:
-        print(f"❌ Erreur bot: {e}")
-        import traceback
-        traceback.print_exc()
-
-# NOTE: Le bloc if __name__ a été SUPPRIMÉ
-# Le bot sera démarré par wsgi.py
+async def setup_telegram_bot():
+    """Configure et démarre le bot Telegram avec webhook"""
+    global telegram_app
+    
+    print("🤖 Configuration du bot Telegram avec webhook...")
+    telegram_app = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    telegram_app.add_handler(CommandHandler("start", start))
+    telegram_app.add_handler(CallbackQueryHandler(button_callback))
+    telegram_app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    
+    await telegram_app.initialize()
+    await telegram_app.start()
+    
+    # Configure le webhook
+    webhook_url = f"{WEBHOOK_URL}/telegram_webhook"
+    await telegram_app.bot.set_webhook(webhook_url)
+    
+    print(f"✅ Bot Telegram configuré avec webhook: {webhook_url}")
+    return telegram_app
