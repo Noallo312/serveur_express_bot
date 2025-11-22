@@ -1,6 +1,7 @@
 import os
+import threading
+import time
 import logging
-import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -9,24 +10,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import app and bot setup
-from app import app, setup_telegram_bot
+# Import app and bot runner
+from app import app, run_bot
 
-# Setup Telegram bot with webhook
-logger.info("🚀 Initialisation du bot Telegram avec webhook...")
+# Start the Telegram bot in a background thread
+logger.info("🚀 Démarrage du bot Telegram en arrière-plan...")
+bot_thread = threading.Thread(target=run_bot, daemon=True, name="TelegramBotPolling")
+bot_thread.start()
 
-# Create event loop and setup bot
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
-try:
-    loop.run_until_complete(setup_telegram_bot())
-    logger.info("✅ Bot Telegram configuré avec webhook")
-except Exception as e:
-    logger.error(f"❌ Erreur lors de la configuration du bot: {e}")
-    import traceback
-    traceback.print_exc()
-
+# Wait for bot to initialize
+time.sleep(3)
+logger.info("✅ Bot Telegram lancé dans un thread séparé")
 logger.info("🌐 Flask app prête à recevoir des requêtes")
 
 # This 'app' object is what Gunicorn will use
