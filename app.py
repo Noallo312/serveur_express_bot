@@ -557,13 +557,34 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Envoie les 3 informations : Nom, Prénom, Mail")
             return
         
-        state.update({
-            'last_name': lines[0].strip(),
-            'first_name': lines[1].strip(),
-            'email': lines[2].strip(),
-            'step': 'waiting_deezer_payment'
-        })
-        await update.message.reply_text(f"✅ Infos reçues\n\n💳 Envoie une capture d'écran de ton paiement")
+        # Enregistrer directement la commande
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("""INSERT INTO orders 
+                     (user_id, username, service, plan, price, cost, timestamp, status,
+                      first_name, last_name, email)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?)""",
+                  (user_id, username, state['service_name'], state['plan_label'], 
+                   state['price'], state['cost'], datetime.now().isoformat(),
+                   lines[1].strip(), lines[0].strip(), lines[2].strip()))
+        
+        order_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        # Notifier les admins
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {lines[1].strip()} {lines[0].strip()}\n📧 {lines[2].strip()}",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                print(f"Erreur envoi admin: {e}")
+        
+        await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
+        del user_states[user_id]
     
     elif state.get('step') == 'waiting_basicfit_form':
         lines = text.strip().split('\n')
@@ -571,59 +592,34 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Envoie les 4 informations : Nom, Prénom, Mail, Date de naissance")
             return
         
-        state.update({
-            'last_name': lines[0].strip(),
-            'first_name': lines[1].strip(),
-            'email': lines[2].strip(),
-            'birth_date': lines[3].strip(),
-            'step': 'waiting_basicfit_payment'
-        })
-        await update.message.reply_text(f"✅ Infos reçues\n\n💳 Envoie une capture d'écran de ton paiement")
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or "Inconnu"
-    
-    if user_id not in user_states:
-        await update.message.reply_text("❌ Commande non trouvée. Utilise /start pour recommencer.")
-        return
-    
-    state = user_states[user_id]
-    
-    if state.get('step') not in ['waiting_deezer_payment', 'waiting_basicfit_payment']:
-        await update.message.reply_text("❌ Je ne suis pas en attente de paiement.")
-        return
-    
-    photo_id = update.message.photo[-1].file_id
-    
-    conn = sqlite3.connect('orders.db')
-    c = conn.cursor()
-    c.execute("""INSERT INTO orders 
-                 (user_id, username, service, plan, photo_id, price, cost, timestamp, status,
-                  first_name, last_name, email, birth_date)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
-              (user_id, username, state['service_name'], state['plan_label'], 
-               photo_id, state['price'], state['cost'], datetime.now().isoformat(),
-               state.get('first_name', ''), state.get('last_name', ''), 
-               state.get('email', ''), state.get('birth_date', '')))
-    
-    order_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    
-    for admin_id in ADMIN_IDS:
-        try:
-            await context.bot.send_message(
-                chat_id=admin_id,
-                text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n👤 {state.get('first_name', '')} {state.get('last_name', '')}\n📧 {state.get('email', '')}\n🎂 {state.get('birth_date', '')}",
-                parse_mode='Markdown'
-            )
-            await context.bot.send_photo(chat_id=admin_id, photo=photo_id, caption=f"Preuve de paiement - Commande #{order_id}")
-        except Exception as e:
-            print(f"Erreur envoi admin: {e}")
-    
-    await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
-    del user_states[user_id]
+        # Enregistrer directement la commande
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("""INSERT INTO orders 
+                     (user_id, username, service, plan, price, cost, timestamp, status,
+                      first_name, last_name, email, birth_date)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
+                  (user_id, username, state['service_name'], state['plan_label'], 
+                   state['price'], state['cost'], datetime.now().isoformat(),
+                   lines[1].strip(), lines[0].strip(), lines[2].strip(), lines[3].strip()))
+        
+        order_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        # Notifier les admins
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {lines[1].strip()} {lines[0].strip()}\n📧 {lines[2].strip()}\n🎂 {lines[3].strip()}",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                print(f"Erreur envoi admin: {e}")
+        
+        await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
+        del user_states[user_id]
 
 def run_bot():
     """Fonction pour démarrer le bot Telegram en mode polling"""
@@ -637,7 +633,6 @@ def run_bot():
         
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(button_callback))
-        application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
         
         print("✅ Bot Telegram configuré !")
