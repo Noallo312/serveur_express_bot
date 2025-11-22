@@ -1,7 +1,6 @@
 import os
-import threading
-import time
 import logging
+import asyncio
 
 # Configure logging
 logging.basicConfig(
@@ -10,25 +9,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Import app and bot runner from app.py
-from app import app, run_bot
+# Import app and bot setup
+from app import app, setup_telegram_bot
 
-# Start the Telegram bot in a background thread
-logger.info("🚀 Démarrage du bot Telegram...")
-bot_thread = threading.Thread(target=run_bot, daemon=True, name="TelegramBot")
-bot_thread.start()
+# Setup Telegram bot with webhook
+logger.info("🚀 Initialisation du bot Telegram avec webhook...")
 
-# Wait for bot to initialize
-time.sleep(3)
-logger.info("✅ Bot Telegram démarré dans un thread séparé")
+# Create event loop and setup bot
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
+try:
+    loop.run_until_complete(setup_telegram_bot())
+    logger.info("✅ Bot Telegram configuré avec webhook")
+except Exception as e:
+    logger.error(f"❌ Erreur lors de la configuration du bot: {e}")
+    import traceback
+    traceback.print_exc()
+
 logger.info("🌐 Flask app prête à recevoir des requêtes")
 
 # This 'app' object is what Gunicorn will use
-# Gunicorn command: gunicorn wsgi:app
-
 if __name__ == "__main__":
-    # This block is only for local testing
-    # On Render, Gunicorn will directly import 'app' from this file
     port = int(os.environ.get('PORT', 5000))
     logger.info(f"🏃 Mode développement - Flask démarre sur le port {port}")
     app.run(host='0.0.0.0', port=port, debug=False)
