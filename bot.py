@@ -19,11 +19,12 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# CONFIGURATION DES SERVICES
+# CONFIGURATION DES SERVICES (gardé pour l'historique, masqué sur le bot)
 SERVICES_CONFIG = {
     'crunchyroll': {
         'name': '🧡 Crunchyroll',
-        'active': True,
+        'active': False,
+        'visible': False,
         'plans': {
             '1_mois': {'label': '1 mois', 'price': 4.00, 'cost': 1.90},
             '1_an_fan': {'label': '1 an Fan', 'price': 12.00, 'cost': 10.00},
@@ -33,7 +34,8 @@ SERVICES_CONFIG = {
     },
     'youtube': {
         'name': '▶️ YouTube Premium',
-        'active': True,
+        'active': False,
+        'visible': False,
         'plans': {
             'solo': {'label': 'Solo (sur ton mail)', 'price': 4.00, 'cost': 0.50},
             'famille': {'label': 'Famille (5 invitations)', 'price': 10.00, 'cost': 1.00}
@@ -41,7 +43,8 @@ SERVICES_CONFIG = {
     },
     'spotify': {
         'name': '🎧 Spotify Premium',
-        'active': True,
+        'active': False,
+        'visible': False,
         'plans': {
             '2_mois': {'label': '2 mois', 'price': 10.00, 'cost': 0.75},
             '1_an': {'label': '1 an (garantie complète)', 'price': 20.00, 'cost': 9.50}
@@ -49,7 +52,8 @@ SERVICES_CONFIG = {
     },
     'chatgpt': {
         'name': '🤖 ChatGPT+',
-        'active': True,
+        'active': False,
+        'visible': False,
         'plans': {
             '1_mois': {'label': '1 mois (sur ton mail)', 'price': 2.00, 'cost': 0.60},
             'business': {'label': 'Business (+5 invitations)', 'price': 5.00, 'cost': 2.90}
@@ -58,15 +62,17 @@ SERVICES_CONFIG = {
     'deezer': {
         'name': '🎵 Deezer Premium',
         'active': True,
+        'visible': True,
         'plans': {
-            'premium': {'label': 'Premium', 'price': 6.00, 'cost': 0.00}
+            'premium': {'label': 'Premium', 'price': 10.00, 'cost': 4.00}
         }
     },
     'basicfit': {
         'name': '🏋️ Basic Fit',
         'active': True,
+        'visible': True,
         'plans': {
-            'abonnement': {'label': 'Abonnement Basic Fit', 'price': 6.00, 'cost': 1.00}
+            'abonnement': {'label': 'Abonnement Basic Fit', 'price': 10.00, 'cost': 1.00}
         }
     }
 }
@@ -105,7 +111,9 @@ def init_db():
                   taken_at TEXT,
                   cancelled_by INTEGER,
                   cancelled_at TEXT,
-                  cancel_reason TEXT)''')
+                  cancel_reason TEXT,
+                  email TEXT,
+                  birth_date TEXT)''')
     
     c.execute('''CREATE TABLE IF NOT EXISTS order_messages
                  (order_id INTEGER,
@@ -705,19 +713,27 @@ def index():
 # ============= BOT TELEGRAM =============
 
 async def start(update: Update, context):
+    print(f"[DEBUG] /start appelé par l'utilisateur {update.message.from_user.id}")
+    
     keyboard = []
     for service_key, service_data in SERVICES_CONFIG.items():
-        if service_data['active']:
+        if service_data['active'] and service_data.get('visible', True):
             keyboard.append([InlineKeyboardButton(service_data['name'], callback_data=f"service_{service_key}")])
+    
+    print(f"[DEBUG] Keyboard créé avec {len(keyboard)} boutons")
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await update.message.reply_text(
-        "🎯 *Bienvenue sur B4U Deals !*\n\n"
-        "Choisis ton service :",
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    try:
+        await update.message.reply_text(
+            "🎯 *Bienvenue sur B4U Deals !*\n\n"
+            "Choisis ton service :",
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+        print("[DEBUG] Message envoyé avec succès")
+    except Exception as e:
+        print(f"[ERROR] Erreur lors de l'envoi du message: {e}")
 
 async def button_callback(update: Update, context):
     query = update.callback_query
@@ -725,6 +741,8 @@ async def button_callback(update: Update, context):
     
     data = query.data
     user_id = query.from_user.id
+    
+    print(f"[DEBUG] Callback reçu: {data} de l'utilisateur {user_id}")
     
     if data.startswith("service_"):
         service_key = data.replace("service_", "")
@@ -762,22 +780,36 @@ async def button_callback(update: Update, context):
             'plan_label': plan['label'],
             'price': plan['price'],
             'cost': plan['cost'],
-            'step': 'waiting_payment'
+            'step': 'waiting_form'
         }
         
-        await query.edit_message_text(
-            f"✅ *Commande confirmée*\n\n"
-            f"Service: {service['name']}\n"
-            f"Plan: {plan['label']}\n"
-            f"Prix: {plan['price']}€\n\n"
-            f"📸 Envoie maintenant une capture d'écran de ton paiement.",
-            parse_mode='Markdown'
-        )
+        # Demander le formulaire approprié selon le service
+        if service_key == 'deezer':
+            await query.edit_message_text(
+                f"✅ *Commande confirmée*\n\n"
+                f"Service: {service['name']}\n"
+                f"Plan: {plan['label']}\n"
+                f"Prix: {plan['price']}€\n\n"
+                f"📝 Envoie ton nom, prénom et adresse mail (chacun sur une ligne)",
+                parse_mode='Markdown'
+            )
+            user_states[user_id]['step'] = 'waiting_deezer_form'
+        
+        elif service_key == 'basicfit':
+            await query.edit_message_text(
+                f"✅ *Commande confirmée*\n\n"
+                f"Service: {service['name']}\n"
+                f"Plan: {plan['label']}\n"
+                f"Prix: {plan['price']}€\n\n"
+                f"📝 Envoie ton nom, prénom, mail et date de naissance (chacun sur une ligne)",
+                parse_mode='Markdown'
+            )
+            user_states[user_id]['step'] = 'waiting_basicfit_form'
     
     elif data == "back_to_services":
         keyboard = []
         for service_key, service_data in SERVICES_CONFIG.items():
-            if service_data['active']:
+            if service_data['active'] and service_data.get('visible', True):
                 keyboard.append([InlineKeyboardButton(service_data['name'], callback_data=f"service_{service_key}")])
         
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -787,24 +819,107 @@ async def button_callback(update: Update, context):
             reply_markup=reply_markup
         )
 
-async def handle_photo(update: Update, context):
+async def handle_text_message(update: Update, context):
+    """Gère les messages texte pour les formulaires"""
     user_id = update.message.from_user.id
     username = update.message.from_user.username or "Inconnu"
+    text = update.message.text
     
-    if user_id not in user_states or user_states[user_id].get('step') != 'waiting_payment':
+    if user_id not in user_states:
         await update.message.reply_text("❌ Commande non trouvée. Utilise /start pour recommencer.")
         return
     
     state = user_states[user_id]
+    
+    # Formulaire Deezer (Nom, Prénom, Mail)
+    if state.get('step') == 'waiting_deezer_form':
+        lines = text.strip().split('\n')
+        if len(lines) < 3:
+            await update.message.reply_text("❌ Envoie les 3 informations : Nom, Prénom, Mail (chacun sur une ligne)")
+            return
+        
+        nom = lines[0].strip()
+        prenom = lines[1].strip()
+        mail = lines[2].strip()
+        
+        user_states[user_id].update({
+            'last_name': nom,
+            'first_name': prenom,
+            'email': mail,
+            'step': 'waiting_deezer_payment'
+        })
+        
+        await update.message.reply_text(
+            f"✅ Infos reçues :\n\n"
+            f"Nom: {nom}\n"
+            f"Prénom: {prenom}\n"
+            f"Mail: {mail}\n\n"
+            f"💳 Maintenant, envoie une capture d'écran de ton paiement",
+            parse_mode='Markdown'
+        )
+    
+    # Formulaire Basic Fit (Nom, Prénom, Mail, Date de naissance)
+    elif state.get('step') == 'waiting_basicfit_form':
+        lines = text.strip().split('\n')
+        if len(lines) < 4:
+            await update.message.reply_text("❌ Envoie les 4 informations : Nom, Prénom, Mail, Date de naissance (chacun sur une ligne)")
+            return
+        
+        nom = lines[0].strip()
+        prenom = lines[1].strip()
+        mail = lines[2].strip()
+        birth_date = lines[3].strip()
+        
+        user_states[user_id].update({
+            'last_name': nom,
+            'first_name': prenom,
+            'email': mail,
+            'birth_date': birth_date,
+            'step': 'waiting_basicfit_payment'
+        })
+        
+        await update.message.reply_text(
+            f"✅ Infos reçues :\n\n"
+            f"Nom: {nom}\n"
+            f"Prénom: {prenom}\n"
+            f"Mail: {mail}\n"
+            f"Date de naissance: {birth_date}\n\n"
+            f"💳 Maintenant, envoie une capture d'écran de ton paiement",
+            parse_mode='Markdown'
+        )
+    
+    else:
+        await update.message.reply_text("Utilise /start pour commencer une commande ! 🎯")
+
+async def handle_photo(update: Update, context):
+    """Gère les photos de paiement"""
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or "Inconnu"
+    
+    if user_id not in user_states:
+        await update.message.reply_text("❌ Commande non trouvée. Utilise /start pour recommencer.")
+        return
+    
+    state = user_states[user_id]
+    
+    # Vérifier si on attend une photo
+    if state.get('step') not in ['waiting_deezer_payment', 'waiting_basicfit_payment']:
+        await update.message.reply_text("❌ Je ne suis pas en attente de paiement. Utilise /start pour recommencer.")
+        return
+    
     photo_id = update.message.photo[-1].file_id
     
+    # Créer la commande en base de données
     conn = sqlite3.connect('orders.db')
     c = conn.cursor()
     c.execute("""INSERT INTO orders 
-                 (user_id, username, service, plan, photo_id, price, cost, timestamp, status)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en_attente')""",
+                 (user_id, username, service, plan, photo_id, price, cost, timestamp, status,
+                  first_name, last_name, email, birth_date)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
               (user_id, username, state['service_name'], state['plan_label'], 
-               photo_id, state['price'], state['cost'], datetime.now().isoformat()))
+               photo_id, state['price'], state['cost'], datetime.now().isoformat(),
+               state.get('first_name', ''), state.get('last_name', ''), 
+               state.get('email', ''), state.get('birth_date', '')))
     
     order_id = c.lastrowid
     conn.commit()
@@ -821,7 +936,10 @@ async def handle_photo(update: Update, context):
                      f"📋 Plan: {state['plan_label']}\n"
                      f"💰 Prix: {state['price']}€\n"
                      f"💵 Coût: {state['cost']}€\n"
-                     f"📈 Bénéfice: {state['price'] - state['cost']}€",
+                     f"📈 Bénéfice: {state['price'] - state['cost']}€\n"
+                     f"👤 Nom: {state.get('first_name', 'N/A')} {state.get('last_name', 'N/A')}\n"
+                     f"📧 Email: {state.get('email', 'N/A')}\n"
+                     f"🎂 Date de naissance: {state.get('birth_date', 'N/A')}",
                 parse_mode='Markdown'
             )
             await context.bot.send_photo(
@@ -843,6 +961,7 @@ async def handle_photo(update: Update, context):
     del user_states[user_id]
 
 async def handle_message(update: Update, context):
+    """Gère les autres messages"""
     await update.message.reply_text(
         "Utilise /start pour commencer une commande ! 🎯"
     )
@@ -853,25 +972,24 @@ def run_bot():
         print("🤖 Démarrage du bot Telegram...")
         application = ApplicationBuilder().token(BOT_TOKEN).build()
         
+        # Ajouter les handlers
         application.add_handler(CommandHandler("start", start))
         application.add_handler(CallbackQueryHandler(button_callback))
         application.add_handler(MessageHandler(filters.PHOTO, handle_photo))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
         
         print("✅ Bot Telegram prêt !")
-        application.run_polling(drop_pending_updates=True)
+        application.run_polling(drop_pending_updates=False, allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         print(f"❌ Erreur bot: {e}")
+        import traceback
+        traceback.print_exc()
 
 def run_flask():
     """Lance le serveur Flask"""
     port = int(os.environ.get('PORT', 5000))
     print(f"🌐 Démarrage Flask sur le port {port}...")
     app.run(host='0.0.0.0', port=port, debug=False)
-
-# Lancer le bot Telegram dans un thread séparé au démarrage
-bot_thread = threading.Thread(target=run_bot, daemon=True)
-bot_thread.start()
 
 if __name__ == '__main__':
     print("=" * 50)
