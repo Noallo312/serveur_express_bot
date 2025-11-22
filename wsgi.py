@@ -4,10 +4,13 @@ import time
 import logging
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
-# Import app and bot runner
+# Import app and bot runner from app.py
 from app import app, run_bot
 
 # Start the Telegram bot in a background thread
@@ -18,9 +21,14 @@ bot_thread.start()
 # Wait for bot to initialize
 time.sleep(3)
 logger.info("✅ Bot Telegram démarré dans un thread séparé")
+logger.info("🌐 Flask app prête à recevoir des requêtes")
 
-# Gunicorn will use this 'app' object
+# This 'app' object is what Gunicorn will use
+# Gunicorn command: gunicorn wsgi:app
+
 if __name__ == "__main__":
+    # This block is only for local testing
+    # On Render, Gunicorn will directly import 'app' from this file
     port = int(os.environ.get('PORT', 5000))
-    logger.info(f"🌐 Démarrage Flask sur le port {port}")
-    app.run(host='0.0.0.0', port=port)
+    logger.info(f"🏃 Mode développement - Flask démarre sur le port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
