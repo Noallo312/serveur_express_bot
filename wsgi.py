@@ -1,10 +1,9 @@
-from app import app
+from main import app
 
 if __name__ == "__main__":
     app.run()
 ```
 
-2. **Mets à jour ton `Procfile`** :
+3. **Vérifie que ton `Procfile` dit** :
 ```
-release: python -c "print('Ready')"
-web: python app.py
+web: gunicorn --bind 0.0.0.0:$PORT --workers 1 --timeout 120 wsgi:app
