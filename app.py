@@ -835,7 +835,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    username = update.message.from_user.username or "Inconnu"
+    username = update.message.from_user.username or f"User_{user_id}"
+    first_name_tg = update.message.from_user.first_name or ""
+    last_name_tg = update.message.from_user.last_name or ""
+    full_name_tg = f"{first_name_tg} {last_name_tg}".strip() or f"User_{user_id}"
     text = update.message.text
     
     if user_id not in user_states:
@@ -869,9 +872,16 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         for admin_id in ADMIN_IDS:
             try:
+                admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
+                if update.message.from_user.username:
+                    admin_text += f"👤 @{username}\n"
+                else:
+                    admin_text += f"👤 {full_name_tg} (ID: {user_id})\n"
+                admin_text += f"📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {lines[1].strip()} {lines[0].strip()}\n📧 {lines[2].strip()}"
+                
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {lines[1].strip()} {lines[0].strip()}\n📧 {lines[2].strip()}",
+                    text=admin_text,
                     parse_mode='Markdown'
                 )
             except Exception as e:
@@ -954,9 +964,16 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         # Notification admins
         for admin_id in ADMIN_IDS:
             try:
+                admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
+                if update.message.from_user.username:
+                    admin_text += f"👤 @{username}\n"
+                else:
+                    admin_text += f"👤 {full_name_tg} (ID: {user_id})\n"
+                admin_text += f"📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {state['first_name']} {state['last_name']}\n📧 {state['email']}\n🎂 {birth_date}"
+                
                 await context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {state['first_name']} {state['last_name']}\n📧 {state['email']}\n🎂 {birth_date}",
+                    text=admin_text,
                     parse_mode='Markdown'
                 )
             except Exception as e:
