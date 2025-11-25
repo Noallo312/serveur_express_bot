@@ -110,7 +110,7 @@ SERVICES_CONFIG = {
         'name': '🏋️ Basic Fit',
         'active': True,
         'visible': True,
-        'category': 'sport',
+        'category': 'direct',
         'plans': {
             'abonnement': {'label': 'Abonnement Basic Fit', 'price': 10.00, 'cost': 1.00}
         }
@@ -694,12 +694,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     print(f"[BOT] /start appelé par {user_id}")
     
-    # Organiser les services par catégories
+    # Organiser les services par catégories + Basic Fit en direct
     keyboard = [
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
         [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-        [InlineKeyboardButton("🏋️ Sport (Basic Fit)", callback_data="cat_sport")]
+        [InlineKeyboardButton("🏋️ Basic Fit", callback_data="service_basicfit")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -710,8 +710,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Comptes streaming\n"
         "• Abonnements musique\n"
         "• Services IA\n"
-        "• Abonnements sport\n\n"
-        "Choisis une catégorie pour commencer :"
+        "• Abonnement sport\n\n"
+        "Choisis une catégorie ou un service pour commencer :"
     )
     
     await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
@@ -737,8 +737,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         category_labels = {
             'streaming': '🎬 Streaming',
             'music': '🎧 Musique',
-            'ai': '🤖 Intelligence Artificielle',
-            'sport': '🏋️ Sport'
+            'ai': '🤖 Intelligence Artificielle'
         }
         
         await query.edit_message_text(
@@ -796,10 +795,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         elif service_key == 'basicfit':
             await query.edit_message_text(
-                f"✅ *Commande confirmée*\n\nService: {service['name']}\nPlan: {plan['label']}\nPrix: {plan['price']}€\n\n📝 Envoie ton nom, prénom, mail et date de naissance (chacun sur une ligne)",
+                f"✅ *Commande confirmée*\n\nService: {service['name']}\nPlan: {plan['label']}\nPrix: {plan['price']}€\n\n📝 Étape 1/4\n\nEnvoie ton *nom de famille* :",
                 parse_mode='Markdown'
             )
-            user_states[user_id]['step'] = 'waiting_basicfit_form'
+            user_states[user_id]['step'] = 'basicfit_nom'
         
         # Formulaire standard pour tous les autres services
         else:
@@ -825,7 +824,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
             [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-            [InlineKeyboardButton("🏋️ Sport (Basic Fit)", callback_data="cat_sport")]
+            [InlineKeyboardButton("🏋️ Basic Fit", callback_data="service_basicfit")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -913,6 +912,57 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 print(f"Erreur envoi admin: {e}")
         
         await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
+        del user_states[user_id]
+    
+    # Basic Fit - Étape par étape
+    elif state.get('step') == 'basicfit_nom':
+        user_states[user_id]['last_name'] = text.strip()
+        user_states[user_id]['step'] = 'basicfit_prenom'
+        await update.message.reply_text("✅ Nom enregistré !\n\n📝 Étape 2/4\n\nEnvoie ton *prénom* :", parse_mode='Markdown')
+    
+    elif state.get('step') == 'basicfit_prenom':
+        user_states[user_id]['first_name'] = text.strip()
+        user_states[user_id]['step'] = 'basicfit_email'
+        await update.message.reply_text("✅ Prénom enregistré !\n\n📝 Étape 3/4\n\nEnvoie ton *email* :", parse_mode='Markdown')
+    
+    elif state.get('step') == 'basicfit_email':
+        if '@' not in text:
+            await update.message.reply_text("❌ Email invalide. Envoie un email valide :")
+            return
+        user_states[user_id]['email'] = text.strip()
+        user_states[user_id]['step'] = 'basicfit_birthdate'
+        await update.message.reply_text("✅ Email enregistré !\n\n📝 Étape 4/4\n\nEnvoie ta *date de naissance* (format: JJ/MM/AAAA) :", parse_mode='Markdown')
+    
+    elif state.get('step') == 'basicfit_birthdate':
+        birth_date = text.strip()
+        
+        # Enregistrer la commande
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute("""INSERT INTO orders 
+                     (user_id, username, service, plan, price, cost, timestamp, status,
+                      first_name, last_name, email, birth_date)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
+                  (user_id, username, state['service_name'], state['plan_label'], 
+                   state['price'], state['cost'], datetime.now().isoformat(),
+                   state['first_name'], state['last_name'], state['email'], birth_date))
+        
+        order_id = c.lastrowid
+        conn.commit()
+        conn.close()
+        
+        # Notification admins
+        for admin_id in ADMIN_IDS:
+            try:
+                await context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n👤 @{username}\n📦 {state['service_name']}\n💰 {state['price']}€\n💵 Coût: {state['cost']}€\n📈 Bénéf: {state['price'] - state['cost']}€\n\n👤 {state['first_name']} {state['last_name']}\n📧 {state['email']}\n🎂 {birth_date}",
+                    parse_mode='Markdown'
+                )
+            except Exception as e:
+                print(f"Erreur envoi admin: {e}")
+        
+        await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci pour ta confiance ! 🙏", parse_mode='Markdown')
         del user_states[user_id]
     
     # Formulaire standard pour les autres services (4 champs)
