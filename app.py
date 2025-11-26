@@ -1756,27 +1756,50 @@ def edit_notifications_for_order(order_id: int, new_text: str):
     finally:
         conn.close()
 
-# ----------------------- Bot runner -----------------------
+# ----------------------- Bot runner (fixed) -----------------------
 def run_bot():
+    """
+    Start the telegram bot in a dedicated thread with its own asyncio event loop.
+
+    The error "There is no current event loop in thread 'TelegramBotPolling'" occurs when
+    Application.run_polling() is called from a thread that doesn't have an asyncio loop set.
+    We create a new loop for this thread and run the polling coroutine inside it.
+    """
     if not BOT_TOKEN:
         print("BOT_TOKEN non configuré - le bot Telegram ne sera pas démarré.")
         return
     try:
+        import asyncio
+        # Create and set an event loop specifically for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
         app_bot.add_handler(CommandHandler("start", start))
         app_bot.add_handler(CallbackQueryHandler(button_callback))
         app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
         print("🤖 Démarrage du bot Telegram (polling)...")
-        # run_polling bloque; lancer dans thread
-        app_bot.run_polling(drop_pending_updates=True)
+        # run_polling is an async coroutine; run it on this thread's loop
+        loop.run_until_complete(app_bot.run_polling(drop_pending_updates=True))
+
     except Exception as e:
         print(f"❌ Erreur critique du bot: {e}")
         traceback.print_exc()
+    finally:
+        # try to shut down async generators and close the loop cleanly
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.close()
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     # Lancer le bot dans un thread séparé
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
+    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
     bot_thread.start()
 
     # Lancer Flask
