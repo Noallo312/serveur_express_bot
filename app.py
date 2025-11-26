@@ -264,6 +264,549 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             justify-content: space-between;
             align-items: center;
         }
+        .header-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .logout-btn, .simulate-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+            cursor: pointer;
+        }
+        .simulate-btn {
+            background: rgba(255,255,255,0.3);
+        }
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+            border-left: 5px solid #667eea;
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .orders-section {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        .orders-section h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        .order-card {
+            background: #f9fafb;
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 15px;
+            border-left: 5px solid #ddd;
+            transition: all 0.3s;
+        }
+        .order-card:hover {
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .order-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+        .order-info {
+            font-size: 14px;
+            color: #666;
+            line-height: 1.6;
+        }
+        .order-info strong {
+            color: #333;
+        }
+        .status-badge {
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+        .status-en_attente {
+            background: #fff3cd;
+            color: #856404;
+        }
+        .status-en_cours {
+            background: #cfe2ff;
+            color: #084298;
+        }
+        .status-terminee {
+            background: #d1e7dd;
+            color: #0f5132;
+        }
+        .status-annulee {
+            background: #f8d7da;
+            color: #842029;
+        }
+        .order-actions {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        .action-btn {
+            padding: 10px 18px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.3s;
+            flex: 1;
+            min-width: 120px;
+        }
+        .action-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        .btn-take { background: #3b82f6; color: white; }
+        .btn-complete { background: #10b981; color: white; }
+        .btn-cancel { background: #ef4444; color: white; }
+        .refresh-btn {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            box-shadow: 0 6px 20px rgba(102,126,234,0.4);
+            transition: all 0.3s;
+        }
+        .refresh-btn:hover {
+            transform: scale(1.1);
+        }
+        .filter-tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .filter-tab {
+            padding: 10px 20px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .filter-tab.active {
+            background: #667eea;
+            color: white;
+            border-color: #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎯 B4U Deals - Dashboard Admin</h1>
+        <div class="header-actions">
+            <a href="/simulate" class="simulate-btn">🎲 Simuler des ventes</a>
+            <a href="/logout" class="logout-btn">Déconnexion</a>
+        </div>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>📦 Total Commandes</h3>
+                <div class="value" id="total-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>⏳ En Attente</h3>
+                <div class="value" id="pending-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>🔄 En Cours</h3>
+                <div class="value" id="inprogress-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>✅ Terminées</h3>
+                <div class="value" id="completed-orders">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>💰 Chiffre d'Affaires</h3>
+                <div class="value" id="revenue">0€</div>
+            </div>
+            <div class="stat-card">
+                <h3>💵 Bénéfice</h3>
+                <div class="value" id="profit">0€</div>
+            </div>
+        </div>
+
+        <div class="orders-section">
+            <h2>📋 Gestion des Commandes</h2>
+            <div class="filter-tabs">
+                <button class="filter-tab active" onclick="filterOrders('all')">Toutes</button>
+                <button class="filter-tab" onclick="filterOrders('en_attente')">En Attente</button>
+                <button class="filter-tab" onclick="filterOrders('en_cours')">En Cours</button>
+                <button class="filter-tab" onclick="filterOrders('terminee')">Terminées</button>
+            </div>
+            <div id="orders-container"></div>
+        </div>
+    </div>
+
+    <button class="refresh-btn" onclick="loadData()">🔄</button>
+
+    <script>
+        let currentFilter = 'all';
+
+        async function loadData() {
+            try {
+                const response = await fetch('/api/dashboard');
+                const data = await response.json();
+                
+                document.getElementById('total-orders').textContent = data.stats.total_orders;
+                document.getElementById('pending-orders').textContent = data.stats.pending_orders;
+                document.getElementById('inprogress-orders').textContent = data.stats.inprogress_orders;
+                document.getElementById('completed-orders').textContent = data.stats.completed_orders;
+                document.getElementById('revenue').textContent = data.stats.revenue.toFixed(0) + '€';
+                document.getElementById('profit').textContent = data.stats.profit.toFixed(0) + '€';
+                
+                displayOrders(data.orders);
+            } catch (error) {
+                console.error('Erreur:', error);
+            }
+        }
+
+        function filterOrders(status) {
+            currentFilter = status;
+            document.querySelectorAll('.filter-tab').forEach(tab => tab.classList.remove('active'));
+            event.target.classList.add('active');
+            loadData();
+        }
+
+        function displayOrders(orders) {
+            const container = document.getElementById('orders-container');
+            
+            let filteredOrders = orders;
+            if (currentFilter !== 'all') {
+                filteredOrders = orders.filter(o => o.status === currentFilter);
+            }
+            
+            if (filteredOrders.length === 0) {
+                container.innerHTML = '<p style="text-align:center;padding:60px;color:#999;font-size:16px">Aucune commande</p>';
+                return;
+            }
+            
+            container.innerHTML = filteredOrders.map(order => `
+                <div class="order-card">
+                    <div class="order-header">
+                        <div>
+                            <strong style="font-size:18px;color:#667eea">#${order.id}</strong>
+                            <span class="status-badge status-${order.status}">${getStatusLabel(order.status)}</span>
+                        </div>
+                        <div style="font-weight:bold;font-size:18px;color:#10b981">${order.price}€</div>
+                    </div>
+                    <div class="order-info">
+                        <div><strong>Service:</strong> ${order.service}</div>
+                        <div><strong>Plan:</strong> ${order.plan}</div>
+                        <div><strong>Client:</strong> @${order.username}</div>
+                        <div><strong>Nom:</strong> ${order.first_name} ${order.last_name}</div>
+                        <div><strong>Email:</strong> ${order.email}</div>
+                        <div><strong>Paiement:</strong> ${order.payment_method || 'N/A'}</div>
+                        <div><strong>Coût:</strong> ${order.cost}€ | <strong>Bénéfice:</strong> ${(order.price - order.cost).toFixed(2)}€</div>
+                    </div>
+                    <div class="order-actions">
+                        <button class="action-btn btn-take" onclick="takeOrder(${order.id})">✋ Prendre en charge</button>
+                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ Marquer terminée</button>
+                        <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌ Annuler</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function getStatusLabel(status) {
+            const labels = {
+                'en_attente': '⏳ En Attente',
+                'en_cours': '🔄 En Cours',
+                'terminee': '✅ Terminée',
+                'annulee': '❌ Annulée'
+            };
+            return labels[status] || status;
+        }
+
+        async function takeOrder(orderId) {
+            if (confirm('Prendre en charge cette commande ?')) {
+                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+                loadData();
+            }
+        }
+
+        async function completeOrder(orderId) {
+            if (confirm('Marquer cette commande comme terminée ?')) {
+                await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
+                loadData();
+            }
+        }
+
+        async function cancelOrder(orderId) {
+            if (confirm('Annuler cette commande ?')) {
+                await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
+                loadData();
+            }
+        }
+
+        loadData();
+        setInterval(loadData, 15000);
+    </script>
+</body>
+</html>
+'''
+
+HTML_SIMULATE = '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#667eea">
+    <title>Simuler des ventes - B4U Deals</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .back-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            text-decoration: none;
+        }
+        .container {
+            max-width: 800px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        .card {
+            background: white;
+            padding: 40px;
+            border-radius: 20px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #667eea;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .form-group {
+            margin-bottom: 25px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+        }
+        .btn-generate {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-generate:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(102,126,234,0.4);
+        }
+        .result {
+            margin-top: 20px;
+            padding: 20px;
+            border-radius: 10px;
+            display: none;
+        }
+        .result.success {
+            background: #d1e7dd;
+            color: #0f5132;
+            display: block;
+        }
+        .result.error {
+            background: #f8d7da;
+            color: #842029;
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎲 Simulateur de Ventes</h1>
+        <a href="/dashboard" class="back-btn">← Retour</a>
+    </div>
+
+    <div class="container">
+        <div class="card">
+            <h2>Générer des ventes fictives</h2>
+            
+            <form id="simulateForm">
+                <div class="form-group">
+                    <label>Nombre de commandes à générer</label>
+                    <input type="number" name="count" min="1" max="100" value="10" required>
+                </div>
+
+                <div class="form-group">
+                    <label>Service</label>
+                    <select name="service">
+                        <option value="all">Tous les services (aléatoire)</option>
+                        <option value="netflix">🎬 Netflix</option>
+                        <option value="hbo">🎬 HBO Max</option>
+                        <option value="crunchyroll">🎬 Crunchyroll</option>
+                        <option value="canal">🎬 Canal+</option>
+                        <option value="disney">🎬 Disney+</option>
+                        <option value="ufc">🎬 UFC Fight Pass</option>
+                        <option value="youtube">▶️ YouTube Premium</option>
+                        <option value="spotify">🎧 Spotify Premium</option>
+                        <option value="deezer">🎵 Deezer Premium</option>
+                        <option value="chatgpt">🤖 ChatGPT+</option>
+                        <option value="basicfit">🏋️ Basic Fit</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label>Statut des commandes</label>
+                    <select name="status">
+                        <option value="terminee">✅ Terminée</option>
+                        <option value="en_cours">🔄 En cours</option>
+                        <option value="en_attente">⏳ En attente</option>
+                        <option value="annulee">❌ Annulée</option>
+                    </select>
+                </div>
+
+                <button type="submit" class="btn-generate">🚀 Générer les ventes</button>
+            </form>
+
+            <div id="result" class="result"></div>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('simulateForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const data = {
+                count: formData.get('count'),
+                service: formData.get('service'),
+                status: formData.get('status')
+            };
+
+            const resultDiv = document.getElementById('result');
+            resultDiv.textContent = '⏳ Génération en cours...';
+            resultDiv.className = 'result';
+            resultDiv.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/simulate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (result.success) {
+                    resultDiv.className = 'result success';
+                    resultDiv.innerHTML = `
+                        <strong>✅ Succès !</strong><br>
+                        ${result.created} commande(s) générée(s) avec succès !<br>
+                        <a href="/dashboard" style="color: #0f5132; text-decoration: underline">Voir dans le dashboard</a>
+                    `;
+                } else {
+                    resultDiv.className = 'result error';
+                    resultDiv.textContent = '❌ Erreur lors de la génération';
+                }
+            } catch (error) {
+                resultDiv.className = 'result error';
+                resultDiv.textContent = '❌ Erreur: ' + error.message;
+            }
+        });
+    </script>
+</body>
+</html>
+'''
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#667eea">
+    <title>Dashboard - B4U Deals</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+            color: #333;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
         .logout-btn {
             background: rgba(255,255,255,0.2);
             color: white;
@@ -598,6 +1141,11 @@ def logout():
 def dashboard():
     return render_template_string(HTML_DASHBOARD)
 
+@app.route('/simulate')
+@login_required
+def simulate():
+    return render_template_string(HTML_SIMULATE)
+
 @app.route('/api/dashboard')
 @login_required
 def api_dashboard():
@@ -687,6 +1235,101 @@ def index():
 @app.route('/health')
 def health():
     return jsonify({'status': 'ok', 'bot': 'running'})
+
+@app.route('/api/simulate', methods=['POST'])
+@login_required
+def api_simulate():
+    import random
+    from datetime import timedelta
+    
+    data = request.json
+    count = int(data.get('count', 1))
+    service_filter = data.get('service', 'all')
+    status = data.get('status', 'terminee')
+    
+    # Noms et prénoms aléatoires
+    first_names = ['Lucas', 'Emma', 'Louis', 'Léa', 'Hugo', 'Chloé', 'Arthur', 'Manon', 'Jules', 'Camille', 
+                   'Tom', 'Sarah', 'Nathan', 'Laura', 'Paul', 'Marie', 'Alexandre', 'Julie', 'Thomas', 'Sophie']
+    last_names = ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand', 'Leroy', 'Moreau',
+                  'Simon', 'Laurent', 'Lefebvre', 'Michel', 'Garcia', 'David', 'Bertrand', 'Roux', 'Vincent', 'Fournier']
+    
+    payment_methods = ['PayPal', 'Virement', 'Revolut']
+    
+    # Services disponibles
+    services_list = []
+    for service_key, service_data in SERVICES_CONFIG.items():
+        for plan_key, plan_data in service_data['plans'].items():
+            services_list.append({
+                'key': service_key,
+                'name': service_data['name'],
+                'plan_key': plan_key,
+                'plan_label': plan_data['label'],
+                'price': plan_data['price'],
+                'cost': plan_data['cost']
+            })
+    
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    
+    created_orders = []
+    
+    for i in range(count):
+        # Sélectionner un service
+        if service_filter == 'all':
+            service = random.choice(services_list)
+        else:
+            filtered = [s for s in services_list if s['key'] == service_filter]
+            service = random.choice(filtered) if filtered else random.choice(services_list)
+        
+        # Générer données aléatoires
+        first_name = random.choice(first_names)
+        last_name = random.choice(last_names)
+        email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@email.com"
+        user_id = random.randint(100000000, 999999999)
+        username = f"user_{random.randint(1000, 9999)}"
+        payment_method = random.choice(payment_methods)
+        
+        # Date aléatoire (dernier mois)
+        days_ago = random.randint(0, 30)
+        timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
+        
+        # Insérer la commande
+        if service['key'] == 'basicfit':
+            birth_date = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1980, 2005)}"
+            c.execute("""INSERT INTO orders 
+                         (user_id, username, service, plan, price, cost, timestamp, status,
+                          first_name, last_name, email, birth_date)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (user_id, username, service['name'], service['plan_label'], 
+                       service['price'], service['cost'], timestamp, status,
+                       first_name, last_name, email, birth_date))
+        elif service['key'] == 'deezer':
+            c.execute("""INSERT INTO orders 
+                         (user_id, username, service, plan, price, cost, timestamp, status,
+                          first_name, last_name, email)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (user_id, username, service['name'], service['plan_label'], 
+                       service['price'], service['cost'], timestamp, status,
+                       first_name, last_name, email))
+        else:
+            c.execute("""INSERT INTO orders 
+                         (user_id, username, service, plan, price, cost, timestamp, status,
+                          first_name, last_name, email, payment_method)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                      (user_id, username, service['name'], service['plan_label'], 
+                       service['price'], service['cost'], timestamp, status,
+                       first_name, last_name, email, payment_method))
+        
+        created_orders.append({
+            'id': c.lastrowid,
+            'service': service['name'],
+            'price': service['price']
+        })
+    
+    conn.commit()
+    conn.close()
+    
+    return jsonify({'success': True, 'created': len(created_orders), 'orders': created_orders})
 
 # ========== TELEGRAM BOT ==========
 
