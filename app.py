@@ -1,18 +1,26 @@
-# Fixed version of app.py
-# - Removed stray duplicated HTML that caused a SyntaxError (CSS tokens outside string)
-# - Repaired truncated/invalid f-strings in admin notification sections (Deezer, Basic Fit, etc.)
-# - Kept original behavior otherwise
+# Full app.py with:
+# - admin notifications saved for all admins (order_messages)
+# - simulate sends notifications to all admins (via Telegram HTTP API) and records message_id
+# - admin buttons (Prendre / Terminer / Annuler) update DB and edit notifications for ALL admins
+# - safer DB connections (check_same_thread=False)
+# - bot started with Application.run_polling in a separate thread (avoids double getUpdates)
+# Note: keep BOT_TOKEN and WEB_PASSWORD in env; ADMIN_IDS is defined below.
 
 import os
 import sqlite3
+import requests
+import random
+import traceback
 from datetime import datetime
 from flask import Flask, render_template_string, request, jsonify, redirect, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from functools import wraps
+import threading
+import time
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 5174507979]
+ADMIN_IDS = [6976573567, 5174507979]  # Remplace par les IDs réels
 WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 app = Flask(__name__)
@@ -167,6 +175,7 @@ def init_db():
 
 init_db()
 
+# ----------------------- HTML TEMPLATES (unchanged) -----------------------
 HTML_LOGIN = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -776,7 +785,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
                     `;
                 } else {
                     resultDiv.className = 'result error';
-                    resultDiv.textContent = '❌ Erreur lors de la génération';
+                    resultDiv.textContent = '❌ Erreur lors de la génération : ' + (result.error || JSON.stringify(result));
                 }
             } catch (error) {
                 resultDiv.className = 'result error';
@@ -787,6 +796,8 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </body>
 </html>
 '''
+
+# ----------------------- ROUTES -----------------------
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -815,24 +826,24 @@ def simulate():
 @app.route('/api/dashboard')
 @login_required
 def api_dashboard():
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    c.execute("SELECT * FROM orders ORDER BY id DESC")
+    c.execute("SELECT id, username, service, plan, price, cost, first_name, last_name, email, payment_method, status FROM orders ORDER BY id DESC")
     orders = []
     for row in c.fetchall():
         orders.append({
             'id': row[0],
-            'username': row[2],
-            'service': row[3],
-            'plan': row[4],
-            'price': row[5],
-            'cost': row[6],
-            'first_name': row[7],
-            'last_name': row[8],
-            'email': row[9],
-            'payment_method': row[11],
-            'status': row[13]
+            'username': row[1],
+            'service': row[2],
+            'plan': row[3],
+            'price': row[4],
+            'cost': row[5],
+            'first_name': row[6],
+            'last_name': row[7],
+            'email': row[8],
+            'payment_method': row[9],
+            'status': row[10]
         })
     
     c.execute("SELECT COUNT(*) FROM orders")
@@ -865,33 +876,47 @@ def api_dashboard():
 @app.route('/api/order/<int:order_id>/take', methods=['POST'])
 @login_required
 def take_order(order_id):
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute("UPDATE orders SET status='en_cours', taken_at=? WHERE id=?", 
-              (datetime.now().isoformat(), order_id))
+    # For web admin, mark taken by "web"
+    c.execute("UPDATE orders SET status='en_cours', admin_username=?, taken_at=? WHERE id=?", 
+              ('web_admin', datetime.now().isoformat(), order_id))
     conn.commit()
     conn.close()
+    # Also edit admin notifications to reflect change
+    try:
+        edit_notifications_for_order(order_id, f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\nPris en charge via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    except Exception as e:
+        print("Erreur edit notifications after take:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/complete', methods=['POST'])
 @login_required
 def complete_order(order_id):
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
     conn.commit()
     conn.close()
+    try:
+        edit_notifications_for_order(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    except Exception as e:
+        print("Erreur edit notifications after complete:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
 @login_required
 def cancel_order(order_id):
-    conn = sqlite3.connect('orders.db')
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE orders SET status='annulee', cancelled_at=? WHERE id=?",
               (datetime.now().isoformat(), order_id))
     conn.commit()
     conn.close()
+    try:
+        edit_notifications_for_order(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+    except Exception as e:
+        print("Erreur edit notifications after cancel:", e)
     return jsonify({'success': True})
 
 @app.route('/')
@@ -902,26 +927,43 @@ def index():
 def health():
     return jsonify({'status': 'ok', 'bot': 'running'})
 
+# ----------------------- SIMULATE (synchrone Flask) -----------------------
 @app.route('/api/simulate', methods=['POST'])
 @login_required
 def api_simulate():
-    import random
     from datetime import timedelta
-    
-    data = request.json
-    count = int(data.get('count', 1))
+
+    # Robust JSON parsing
+    try:
+        data = request.get_json(force=True)
+        if data is None:
+            raise ValueError("Corps JSON vide")
+    except Exception as e:
+        err = f"JSON parsing error: {e}"
+        print(err)
+        return jsonify({'success': False, 'error': 'invalid_json', 'detail': str(e)}), 400
+
+    # Validate / sanitize inputs
+    try:
+        count = int(data.get('count', 1))
+    except Exception as e:
+        return jsonify({'success': False, 'error': 'invalid_count', 'detail': f"count doit être un entier. valeur reçue: {data.get('count')}"}), 400
+
     service_filter = data.get('service', 'all')
     status = data.get('status', 'terminee')
-    
-    # Noms et prénoms aléatoires
-    first_names = ['Lucas', 'Emma', 'Louis', 'Léa', 'Hugo', 'Chloé', 'Arthur', 'Manon', 'Jules', 'Camille', 
+
+    allowed_statuses = {'terminee', 'en_cours', 'en_attente', 'annulee'}
+    if status not in allowed_statuses:
+        return jsonify({'success': False, 'error': 'invalid_status', 'detail': f"status doit être parmi {sorted(list(allowed_statuses))}"}), 400
+
+    # Noms aléatoires + méthodes de paiement
+    first_names = ['Lucas', 'Emma', 'Louis', 'Léa', 'Hugo', 'Chloé', 'Arthur', 'Manon', 'Jules', 'Camille',
                    'Tom', 'Sarah', 'Nathan', 'Laura', 'Paul', 'Marie', 'Alexandre', 'Julie', 'Thomas', 'Sophie']
     last_names = ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand', 'Leroy', 'Moreau',
                   'Simon', 'Laurent', 'Lefebvre', 'Michel', 'Garcia', 'David', 'Bertrand', 'Roux', 'Vincent', 'Fournier']
-    
     payment_methods = ['PayPal', 'Virement', 'Revolut']
-    
-    # Services disponibles
+
+    # Construire la liste des services/plans disponibles
     services_list = []
     for service_key, service_data in SERVICES_CONFIG.items():
         for plan_key, plan_data in service_data['plans'].items():
@@ -933,71 +975,138 @@ def api_simulate():
                 'price': plan_data['price'],
                 'cost': plan_data['cost']
             })
-    
-    conn = sqlite3.connect('orders.db')
+
+    # Vérifier que le filtre service existe si ce n'est pas 'all'
+    if service_filter != 'all' and not any(s['key'] == service_filter for s in services_list):
+        return jsonify({'success': False, 'error': 'invalid_service', 'detail': f"service inconnu: {service_filter}"}), 400
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    
+
     created_orders = []
-    
-    for i in range(count):
-        # Sélectionner un service
-        if service_filter == 'all':
-            service = random.choice(services_list)
-        else:
-            filtered = [s for s in services_list if s['key'] == service_filter]
-            service = random.choice(filtered) if filtered else random.choice(services_list)
-        
-        # Générer données aléatoires
-        first_name = random.choice(first_names)
-        last_name = random.choice(last_names)
-        email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@email.com"
-        user_id = random.randint(100000000, 999999999)
-        username = f"user_{random.randint(1000, 9999)}"
-        payment_method = random.choice(payment_methods)
-        
-        # Date aléatoire (dernier mois)
-        days_ago = random.randint(0, 30)
-        timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
-        
-        # Insérer la commande
-        if service['key'] == 'basicfit':
-            birth_date = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1980, 2005)}"
-            c.execute("""INSERT INTO orders 
-                         (user_id, username, service, plan, price, cost, timestamp, status,
-                          first_name, last_name, email, birth_date)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (user_id, username, service['name'], service['plan_label'], 
-                       service['price'], service['cost'], timestamp, status,
-                       first_name, last_name, email, birth_date))
-        elif service['key'] == 'deezer':
-            c.execute("""INSERT INTO orders 
-                         (user_id, username, service, plan, price, cost, timestamp, status,
-                          first_name, last_name, email)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (user_id, username, service['name'], service['plan_label'], 
-                       service['price'], service['cost'], timestamp, status,
-                       first_name, last_name, email))
-        else:
-            c.execute("""INSERT INTO orders 
-                         (user_id, username, service, plan, price, cost, timestamp, status,
-                          first_name, last_name, email, payment_method)
-                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                      (user_id, username, service['name'], service['plan_label'], 
-                       service['price'], service['cost'], timestamp, status,
-                       first_name, last_name, email, payment_method))
-        
-        created_orders.append({
-            'id': c.lastrowid,
-            'service': service['name'],
-            'price': service['price']
-        })
-    
-    conn.commit()
-    conn.close()
-    
+    try:
+        for i in range(count):
+            # Choix du service
+            if service_filter == 'all':
+                service = random.choice(services_list)
+            else:
+                filtered = [s for s in services_list if s['key'] == service_filter]
+                service = random.choice(filtered) if filtered else random.choice(services_list)
+
+            # Générer données aléatoires
+            first_name = random.choice(first_names)
+            last_name = random.choice(last_names)
+            email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@email.com"
+            user_id = random.randint(100000000, 999999999)
+            username = f"user_{random.randint(1000, 9999)}"
+            payment_method = random.choice(payment_methods)
+
+            # Date aléatoire (dernier mois)
+            days_ago = random.randint(0, 30)
+            timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
+
+            # Insérer la commande en tenant compte des champs spécifiques
+            if service['key'] == 'basicfit':
+                birth_date = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1980, 2005)}"
+                c.execute("""INSERT INTO orders 
+                             (user_id, username, service, plan, price, cost, timestamp, status,
+                              first_name, last_name, email, birth_date)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (user_id, username, service['name'], service['plan_label'],
+                           service['price'], service['cost'], timestamp, status,
+                           first_name, last_name, email, birth_date))
+            elif service['key'] == 'deezer':
+                c.execute("""INSERT INTO orders 
+                             (user_id, username, service, plan, price, cost, timestamp, status,
+                              first_name, last_name, email)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (user_id, username, service['name'], service['plan_label'],
+                           service['price'], service['cost'], timestamp, status,
+                           first_name, last_name, email))
+            else:
+                c.execute("""INSERT INTO orders 
+                             (user_id, username, service, plan, price, cost, timestamp, status,
+                              first_name, last_name, email, payment_method)
+                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                          (user_id, username, service['name'], service['plan_label'],
+                           service['price'], service['cost'], timestamp, status,
+                           first_name, last_name, email, payment_method))
+
+            order_id = c.lastrowid
+
+            # --- Notification aux admins (envoi Telegram via HTTP API) ---
+            admin_message = (
+                f"🔔 *NOUVELLE COMMANDE #{order_id}* (simulation)\n\n"
+                f"👤 Client: @{username}\n"
+                f"📦 Service: {service['name']}\n"
+                f"📋 Plan: {service['plan_label']}\n"
+                f"💰 Prix: {service['price']}€\n"
+                f"💵 Coût: {service['cost']}€\n"
+                f"📈 Bénéf: {service['price'] - service['cost']}€\n\n"
+                f"*Informations client:*\n"
+                f"👤 {first_name} {last_name}\n"
+                f"📧 {email}\n"
+                f"💳 Paiement: {payment_method}\n\n"
+                f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            )
+
+            reply_markup = {
+                "inline_keyboard": [
+                    [
+                        {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
+                        {"text": "✅ Terminer", "callback_data": f"admin_complete_{order_id}"},
+                        {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
+                    ]
+                ]
+            }
+
+            if BOT_TOKEN:
+                for admin_id in ADMIN_IDS:
+                    try:
+                        resp = requests.post(
+                            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                            json={
+                                "chat_id": admin_id,
+                                "text": admin_message,
+                                "parse_mode": "Markdown",
+                                "reply_markup": reply_markup
+                            },
+                            timeout=10
+                        )
+                        if resp.ok:
+                            j = resp.json()
+                            if j.get("ok") and j.get("result"):
+                                msg_id = j["result"]["message_id"]
+                                # enregistrer message_id
+                                try:
+                                    c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                                 VALUES (?, ?, ?)""", (order_id, admin_id, msg_id))
+                                except Exception as e:
+                                    print("order_messages insert error:", e)
+                    except Exception as e:
+                        print(f"[simulate -> notify admin {admin_id}] Erreur: {e}")
+
+            created_orders.append({
+                'id': order_id,
+                'service': service['name'],
+                'price': service['price']
+            })
+
+        conn.commit()
+
+    except Exception as e:
+        conn.rollback()
+        tb = traceback.format_exc()
+        print("Erreur lors de la génération des commandes:", e)
+        print(tb)
+        return jsonify({'success': False, 'error': 'exception_during_insert', 'detail': str(e), 'trace': tb}), 500
+
+    finally:
+        conn.close()
+
     return jsonify({'success': True, 'created': len(created_orders), 'orders': created_orders})
 
-# ========== TELEGRAM BOT ==========
+# ----------------------- TELEGRAM BOT HANDLERS -----------------------
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -1054,9 +1163,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        return
     
     # Services
-    elif data.startswith("service_"):
+    if data.startswith("service_"):
         service_key = data.replace("service_", "")
         service = SERVICES_CONFIG[service_key]
         keyboard = []
@@ -1075,9 +1185,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        return
     
     # Plans
-    elif data.startswith("plan_"):
+    if data.startswith("plan_"):
         parts = data.replace("plan_", "").split("_")
         service_key = parts[0]
         plan_key = "_".join(parts[1:])
@@ -1101,6 +1212,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             user_states[user_id]['step'] = 'waiting_deezer_form'
+            return
         
         elif service_key == 'basicfit':
             await query.edit_message_text(
@@ -1108,6 +1220,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode='Markdown'
             )
             user_states[user_id]['step'] = 'basicfit_nom'
+            return
         
         # Formulaire standard pour tous les autres services
         else:
@@ -1126,9 +1239,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "PayPal"
             )
             await query.edit_message_text(form_text, parse_mode='Markdown')
+            return
     
     # Retour au menu principal
-    elif data == "back_to_menu":
+    if data == "back_to_menu":
         keyboard = [
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
@@ -1141,7 +1255,112 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
+        return
 
+    # --- Gestion des actions admin (depuis les messages envoyés aux admins) ---
+    if data.startswith("admin_"):
+        # Ex: admin_take_123
+        parts = data.split("_")
+        if len(parts) < 3:
+            await query.answer("Données invalides", show_alert=True)
+            return
+
+        action = parts[1]  # 'take' / 'complete' / 'cancel'
+        try:
+            order_id = int(parts[2])
+        except ValueError:
+            await query.answer("ID de commande invalide", show_alert=True)
+            return
+
+        admin_user_id = query.from_user.id
+        admin_username = query.from_user.username or (query.from_user.first_name or "").strip()
+
+        # Vérifier que l'utilisateur est admin
+        if admin_user_id not in ADMIN_IDS:
+            await query.answer("Tu n'es pas autorisé à effectuer cette action", show_alert=True)
+            return
+
+        # Récupérer la commande (détails)
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT service, plan, price FROM orders WHERE id=?", (order_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
+            await query.answer("Commande introuvable", show_alert=True)
+            return
+        service_name, plan_label, price = row
+
+        # Mettre à jour le statut en base et préparer le nouveau texte
+        timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+        if action == "take":
+            c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
+                      (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
+            conn.commit()
+            new_text = (
+                f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n"
+                f"Pris en charge par @{admin_username}\n"
+                f"📦 {service_name} — {plan_label}\n"
+                f"💰 {price}€\n\n"
+                f"🕒 {timestamp}"
+            )
+            answer_text = "Commande prise en charge ✅"
+
+        elif action == "complete":
+            c.execute("UPDATE orders SET status='terminee', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
+                      (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
+            conn.commit()
+            new_text = (
+                f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\n"
+                f"Traitée par @{admin_username}\n"
+                f"📦 {service_name} — {plan_label}\n"
+                f"💰 Montant: {price}€\n\n"
+                f"🕒 {timestamp}"
+            )
+            answer_text = "Commande marquée terminée ✅"
+
+        elif action == "cancel":
+            c.execute("UPDATE orders SET status='annulee', cancelled_by=?, cancelled_at=? WHERE id=?",
+                      (admin_user_id, datetime.now().isoformat(), order_id))
+            conn.commit()
+            new_text = (
+                f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\n"
+                f"Annulée par @{admin_username}\n"
+                f"📦 {service_name} — {plan_label}\n"
+                f"🕒 {timestamp}"
+            )
+            answer_text = "Commande annulée ✅"
+
+        else:
+            conn.close()
+            await query.answer("Action inconnue", show_alert=True)
+            return
+
+        # Récupérer tous les message_ids liés à cette commande et éditer chaque notification
+        try:
+            c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+            rows = c.fetchall()
+            for admin_chat_id, message_id in rows:
+                try:
+                    await context.bot.edit_message_text(
+                        chat_id=admin_chat_id,
+                        message_id=message_id,
+                        text=new_text,
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    # Si l'édition échoue (message supprimé, etc.), log juste l'erreur
+                    print(f"[edit_message] Erreur pour admin {admin_chat_id} msg {message_id}: {e}")
+        except Exception as e:
+            print(f"[fetch order_messages] Erreur: {e}")
+        finally:
+            conn.close()
+
+        # Répondre au callback pour confirmer l'action
+        await query.answer(answer_text)
+        return
+
+# ----------------------- TEXT MESSAGE HANDLER -----------------------
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
@@ -1165,7 +1384,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Envoie les 3 informations : Nom, Prénom, Mail")
             return
         
-        conn = sqlite3.connect('orders.db')
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -1177,9 +1396,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         conn.commit()
-        conn.close()
-        
-        # Notify admins
+
+        # Notify all admins and record message_ids
         for admin_id in ADMIN_IDS:
             try:
                 admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
@@ -1196,26 +1414,52 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"📧 {lines[2].strip()}\n"
                     f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
-                
-                await context.bot.send_message(
+
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+                ]])
+
+                msg = await context.bot.send_message(
                     chat_id=admin_id,
                     text=admin_text,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
                 )
+
+                # Enregistrer message_id
+                try:
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                    conn2.commit()
+                except Exception as e:
+                    print(f"[order_messages insert] Erreur: {e}")
+                finally:
+                    try:
+                        conn2.close()
+                    except:
+                        pass
+
             except Exception as e:
                 print(f"Erreur envoi admin: {e}")
         
+        conn.close()
+        
         await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
         del user_states[user_id]
+        return
     
-    # Formulaire Basic Fit (4 champs) - legacy/alternate path (kept for compatibility)
-    elif state.get('step') == 'waiting_basicfit_form':
+    # Formulaire Basic Fit (legacy)
+    if state.get('step') == 'waiting_basicfit_form':
         lines = text.strip().split('\n')
         if len(lines) < 4:
             await update.message.reply_text("❌ Envoie les 4 informations : Nom, Prénom, Mail, Date de naissance")
             return
         
-        conn = sqlite3.connect('orders.db')
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -1227,9 +1471,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         conn.commit()
-        conn.close()
-        
-        # Notify admins
+
         for admin_id in ADMIN_IDS:
             try:
                 admin_text = (
@@ -1244,41 +1486,66 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"🎂 {lines[3].strip()}\n"
                     f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
-                await context.bot.send_message(
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+                ]])
+                msg = await context.bot.send_message(
                     chat_id=admin_id,
                     text=admin_text,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
                 )
+                try:
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                    conn2.commit()
+                except Exception as e:
+                    print(f"[order_messages insert] Erreur: {e}")
+                finally:
+                    try:
+                        conn2.close()
+                    except:
+                        pass
             except Exception as e:
                 print(f"Erreur envoi admin: {e}")
         
+        conn.close()
+        
         await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
         del user_states[user_id]
-    
-    # Basic Fit - Étape par étape
-    elif state.get('step') == 'basicfit_nom':
+        return
+
+    # Basic Fit step-by-step
+    if state.get('step') == 'basicfit_nom':
         user_states[user_id]['last_name'] = text.strip()
         user_states[user_id]['step'] = 'basicfit_prenom'
         await update.message.reply_text("✅ Nom enregistré !\n\n📝 Étape 2/4\n\nEnvoie ton *prénom* :", parse_mode='Markdown')
+        return
     
-    elif state.get('step') == 'basicfit_prenom':
+    if state.get('step') == 'basicfit_prenom':
         user_states[user_id]['first_name'] = text.strip()
         user_states[user_id]['step'] = 'basicfit_email'
         await update.message.reply_text("✅ Prénom enregistré !\n\n📝 Étape 3/4\n\nEnvoie ton *email* :", parse_mode='Markdown')
+        return
     
-    elif state.get('step') == 'basicfit_email':
+    if state.get('step') == 'basicfit_email':
         if '@' not in text:
             await update.message.reply_text("❌ Email invalide. Envoie un email valide :")
             return
         user_states[user_id]['email'] = text.strip()
         user_states[user_id]['step'] = 'basicfit_birthdate'
         await update.message.reply_text("✅ Email enregistré !\n\n📝 Étape 4/4\n\nEnvoie ta *date de naissance* (format: JJ/MM/AAAA) :", parse_mode='Markdown')
+        return
     
-    elif state.get('step') == 'basicfit_birthdate':
+    if state.get('step') == 'basicfit_birthdate':
         birth_date = text.strip()
         
         # Enregistrer la commande
-        conn = sqlite3.connect('orders.db')
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -1290,9 +1557,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         conn.commit()
-        conn.close()
-        
-        # Notification admins
+
         for admin_id in ADMIN_IDS:
             try:
                 admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
@@ -1311,19 +1576,42 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
                 
-                await context.bot.send_message(
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+                ]])
+
+                msg = await context.bot.send_message(
                     chat_id=admin_id,
                     text=admin_text,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
                 )
+                try:
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                    conn2.commit()
+                except Exception as e:
+                    print(f"[order_messages insert] Erreur: {e}")
+                finally:
+                    try:
+                        conn2.close()
+                    except:
+                        pass
             except Exception as e:
                 print(f"Erreur envoi admin: {e}")
         
+        conn.close()
+        
         await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci pour ta confiance ! 🙏", parse_mode='Markdown')
         del user_states[user_id]
+        return
     
     # Formulaire standard pour les autres services (4 champs)
-    elif state.get('step') == 'waiting_form':
+    if state.get('step') == 'waiting_form':
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         
         if len(lines) < 4:
@@ -1357,7 +1645,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             return
         
         # Enregistrer la commande
-        conn = sqlite3.connect('orders.db')
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -1369,9 +1657,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         conn.commit()
-        conn.close()
-        
-        # Notification admins
+
+        # Notification admins (tous) + save message ids
         admin_message = (
             f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
             f"👤 Client: @{username}\n"
@@ -1379,23 +1666,44 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"📋 Plan: {state['plan_label']}\n"
             f"💰 Prix: {state['price']}€\n"
             f"💵 Coût: {state['cost']}€\n"
-            f"📈 Bénéfice: {state['price'] - state['cost']}€\n\n"
+            f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
             f"*Informations client:*\n"
             f"👤 {first_name} {last_name}\n"
             f"📧 {email}\n"
             f"💳 Paiement: {payment_method}\n\n"
             f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+            InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+        ]])
         
         for admin_id in ADMIN_IDS:
             try:
-                await context.bot.send_message(
+                msg = await context.bot.send_message(
                     chat_id=admin_id,
                     text=admin_message,
-                    parse_mode='Markdown'
+                    parse_mode='Markdown',
+                    reply_markup=keyboard
                 )
+                try:
+                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    c2 = conn2.cursor()
+                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                    conn2.commit()
+                except Exception as e:
+                    print(f"[order_messages insert] Erreur: {e}")
+                finally:
+                    try:
+                        conn2.close()
+                    except:
+                        pass
             except Exception as e:
                 print(f"[ERREUR] Notification admin {admin_id}: {e}")
+        
+        conn.close()
         
         # Confirmation client
         confirmation_message = (
@@ -1412,47 +1720,65 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         # Nettoyer l'état
         del user_states[user_id]
+        return
 
-def run_bot():
-    """Démarrage du bot Telegram en mode polling"""
-    import asyncio
+# ----------------------- Helper to edit notifications for all admins -----------------------
+def edit_notifications_for_order(order_id: int, new_text: str):
+    """
+    Édite toutes les notifications (order_messages) pour une commande donnée,
+    en remplaçant le texte par new_text. Utilisé par le dashboard sync routes.
+    """
+    # Use Telegram HTTP API to edit messages (synchronous)
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
-        print("🤖 Démarrage du bot Telegram...")
-        application = ApplicationBuilder().token(BOT_TOKEN).build()
-        
-        application.add_handler(CommandHandler("start", start))
-        application.add_handler(CallbackQueryHandler(button_callback))
-        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-        
-        print("✅ Bot Telegram configuré avec succès !")
-        
-        loop.run_until_complete(application.initialize())
-        loop.run_until_complete(application.start())
-        loop.run_until_complete(application.updater.start_polling(
-            drop_pending_updates=True,
-            allowed_updates=Update.ALL_TYPES,
-            poll_interval=1.0,
-            timeout=30
-        ))
-        
-        print("🔄 Bot en écoute des messages...")
-        loop.run_forever()
-        
+        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+        rows = c.fetchall()
+        for admin_chat_id, message_id in rows:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                    json={
+                        "chat_id": admin_chat_id,
+                        "message_id": message_id,
+                        "text": new_text,
+                        "parse_mode": "Markdown"
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[edit_notifications_for_order] Erreur edit admin {admin_chat_id} msg {message_id}: {e}")
+    except Exception as e:
+        print("Erreur récupérer order_messages:", e)
+    finally:
+        conn.close()
+
+# ----------------------- Bot runner -----------------------
+def run_bot():
+    if not BOT_TOKEN:
+        print("BOT_TOKEN non configuré - le bot Telegram ne sera pas démarré.")
+        return
+    try:
+        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+        app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CallbackQueryHandler(button_callback))
+        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+        print("🤖 Démarrage du bot Telegram (polling)...")
+        # run_polling bloque; lancer dans thread
+        app_bot.run_polling(drop_pending_updates=True)
     except Exception as e:
         print(f"❌ Erreur critique du bot: {e}")
-        import traceback
         traceback.print_exc()
 
 if __name__ == '__main__':
-    import threading
-    
     # Lancer le bot dans un thread séparé
     bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-    
+
     # Lancer Flask
     port = int(os.environ.get('PORT', 10000))
     app.run(host='0.0.0.0', port=port)
