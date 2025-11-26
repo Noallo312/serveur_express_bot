@@ -1764,6 +1764,12 @@ def run_bot():
     The error "There is no current event loop in thread 'TelegramBotPolling'" occurs when
     Application.run_polling() is called from a thread that doesn't have an asyncio loop set.
     We create a new loop for this thread and run the polling coroutine inside it.
+
+    Additionally, Application.run_polling tries to register signal handlers using
+    loop.add_signal_handler(), which raises a RuntimeError when called from a non-main
+    thread ("set_wakeup_fd only works in main thread of the main interpreter").
+    To avoid that, pass stop_signals=None (or an empty tuple) so the library won't attempt
+    to register signal handlers from this non-main thread.
     """
     if not BOT_TOKEN:
         print("BOT_TOKEN non configuré - le bot Telegram ne sera pas démarré.")
@@ -1781,7 +1787,11 @@ def run_bot():
 
         print("🤖 Démarrage du bot Telegram (polling)...")
         # run_polling is an async coroutine; run it on this thread's loop
-        loop.run_until_complete(app_bot.run_polling(drop_pending_updates=True))
+        # IMPORTANT: when running in a non-main thread we must disable signal handling to avoid:
+        # "set_wakeup_fd only works in main thread of the main interpreter"
+        loop.run_until_complete(
+            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
+        )
 
     except Exception as e:
         print(f"❌ Erreur critique du bot: {e}")
