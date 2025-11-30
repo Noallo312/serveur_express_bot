@@ -1,10 +1,8 @@
-# Full app.py with:
-# - admin notifications saved for all admins (order_messages)
-# - simulate sends notifications to all admins (via Telegram HTTP API) and records message_id
-# - admin buttons (Prendre / Terminer / Annuler) update DB and edit notifications for ALL admins
-# - safer DB connections (check_same_thread=False)
-# - bot started with Application.run_polling in a separate thread (avoids double getUpdates)
-# Note: keep BOT_TOKEN and WEB_PASSWORD in env; ADMIN_IDS is defined below.
+# Full app.py avec système de parrainage et sans Basic Fit
+# - Basic Fit retiré
+# - Système de parrainage manuel avec dashboard /referrals
+# - Détection automatique des parrainages via /start REF_xxxxx
+# - Admin peut voir tous les parrainages et statistiques
 
 import os
 import sqlite3
@@ -20,12 +18,13 @@ import threading
 import time
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_IDS = [6976573567, 5174507979]  # Remplace par les IDs réels
+ADMIN_IDS = [6976573567, 5174507979]
 WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
+# ⭐ SERVICES_CONFIG sans Basic Fit
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -118,15 +117,6 @@ SERVICES_CONFIG = {
         'plans': {
             'premium': {'label': 'Deezer Premium', 'price': 4.00, 'cost': 3.00}
         }
-    },
-    'basicfit': {
-        'name': '🏋️ Basic Fit',
-        'active': True,
-        'visible': True,
-        'category': 'direct',
-        'plans': {
-            'abonnement': {'label': 'Abonnement Basic Fit', 'price': 10.00, 'cost': 1.00}
-        }
     }
 }
 
@@ -140,6 +130,7 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+# ⭐ DATABASE avec table referrals
 def init_db():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
@@ -170,12 +161,25 @@ def init_db():
                   admin_id INTEGER,
                   message_id INTEGER)''')
     
+    # ⭐ NOUVELLE TABLE REFERRALS
+    c.execute('''CREATE TABLE IF NOT EXISTS referrals
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  referrer_id INTEGER,
+                  referrer_username TEXT,
+                  referrer_first_name TEXT,
+                  referred_id INTEGER,
+                  referred_username TEXT,
+                  referred_first_name TEXT,
+                  referral_code TEXT,
+                  timestamp TEXT,
+                  UNIQUE(referred_id))''')
+    
     conn.commit()
     conn.close()
 
 init_db()
 
-# ----------------------- HTML TEMPLATES (unchanged) -----------------------
+# ----------------------- HTML TEMPLATES -----------------------
 HTML_LOGIN = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -282,7 +286,7 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             display: flex;
             gap: 10px;
         }
-        .logout-btn, .simulate-btn {
+        .logout-btn, .simulate-btn, .referral-btn {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 10px 20px;
@@ -293,6 +297,9 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
         }
         .simulate-btn {
             background: rgba(255,255,255,0.3);
+        }
+        .referral-btn {
+            background: rgba(255,200,0,0.3);
         }
         .container {
             max-width: 1400px;
@@ -450,7 +457,8 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
     <div class="header">
         <h1>🎯 B4U Deals - Dashboard Admin</h1>
         <div class="header-actions">
-            <a href="/simulate" class="simulate-btn">🎲 Simuler des ventes</a>
+            <a href="/referrals" class="referral-btn">🎁 Parrainages</a>
+            <a href="/simulate" class="simulate-btn">🎲 Simuler</a>
             <a href="/logout" class="logout-btn">Déconnexion</a>
         </div>
     </div>
@@ -730,7 +738,6 @@ HTML_SIMULATE = '''<!DOCTYPE html>
                         <option value="spotify">🎧 Spotify Premium</option>
                         <option value="deezer">🎵 Deezer Premium</option>
                         <option value="chatgpt">🤖 ChatGPT+</option>
-                        <option value="basicfit">🏋️ Basic Fit</option>
                     </select>
                 </div>
 
@@ -797,7 +804,305 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </html>
 '''
 
-# ----------------------- ROUTES -----------------------
+# ⭐ NOUVEAU: PAGE REFERRALS
+HTML_REFERRALS = '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Parrainages - B4U Deals</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .back-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .referrals-section {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #333;
+        }
+        tr:hover {
+            background: #f9fafb;
+        }
+        .badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .badge-gold {
+            background: #ffd700;
+            color: #333;
+        }
+        .badge-silver {
+            background: #c0c0c0;
+            color: #333;
+        }
+        .badge-bronze {
+            background: #cd7f32;
+            color: white;
+        }
+        .search-box {
+            margin-bottom: 20px;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .btn-view {
+            padding: 8px 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-view:hover {
+            background: #5568d3;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: #000;
+        }
+        .filleul-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎁 Système de Parrainage</h1>
+        <a href="/dashboard" class="back-btn">← Dashboard</a>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>👥 Total Parrains</h3>
+                <div class="value" id="total-referrers">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>🎯 Total Filleuls</h3>
+                <div class="value" id="total-referrals">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>🏆 Top Parrain</h3>
+                <div class="value" id="top-referrer" style="font-size:18px">-</div>
+            </div>
+            <div class="stat-card">
+                <h3>📈 Moy. par Parrain</h3>
+                <div class="value" id="avg-referrals">0</div>
+            </div>
+        </div>
+
+        <div class="referrals-section">
+            <h2 style="margin-bottom:20px">📊 Classement des Parrains</h2>
+            <input type="text" class="search-box" id="searchBox" placeholder="🔍 Rechercher un parrain..." onkeyup="filterTable()">
+            <table id="referralsTable">
+                <thead>
+                    <tr>
+                        <th>🏅 Rang</th>
+                        <th>👤 Parrain</th>
+                        <th>📞 Telegram</th>
+                        <th>🎯 Filleuls</th>
+                        <th>📋 Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="referrals-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="detailsModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2 id="modal-title">Détails</h2>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        async function loadReferrals() {
+            const response = await fetch('/api/referrals');
+            const data = await response.json();
+            
+            document.getElementById('total-referrers').textContent = data.stats.total_referrers;
+            document.getElementById('total-referrals').textContent = data.stats.total_referrals;
+            document.getElementById('top-referrer').textContent = data.stats.top_referrer || '-';
+            document.getElementById('avg-referrals').textContent = data.stats.avg_referrals.toFixed(1);
+            
+            const tbody = document.getElementById('referrals-body');
+            tbody.innerHTML = data.referrers.map((r, index) => {
+                let badge = '';
+                if (index === 0) badge = '<span class="badge badge-gold">🥇 1er</span>';
+                else if (index === 1) badge = '<span class="badge badge-silver">🥈 2ème</span>';
+                else if (index === 2) badge = '<span class="badge badge-bronze">🥉 3ème</span>';
+                
+                return `
+                    <tr>
+                        <td><strong>${index + 1}</strong>${badge}</td>
+                        <td>${r.first_name || 'Inconnu'}</td>
+                        <td>@${r.username} <br><small style="color:#999">ID: ${r.referrer_id}</small></td>
+                        <td><strong style="color:#667eea;font-size:18px">${r.count}</strong> personne(s)</td>
+                        <td><button class="btn-view" onclick="showDetails(${r.referrer_id}, '${r.first_name}', '@${r.username}')">👁️ Voir</button></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function showDetails(referrerId, name, username) {
+            const response = await fetch(\`/api/referrals/\${referrerId}\`);
+            const data = await response.json();
+            
+            document.getElementById('modal-title').textContent = \`🎁 Filleuls de \${name} (\${username})\`;
+            
+            if (data.referrals.length === 0) {
+                document.getElementById('modal-body').innerHTML = '<p style="text-align:center;color:#999;padding:40px">Aucun filleul</p>';
+            } else {
+                document.getElementById('modal-body').innerHTML = data.referrals.map(r => \`
+                    <div class="filleul-item">
+                        <strong>👤 \${r.referred_first_name || 'Inconnu'}</strong> (@\${r.referred_username})<br>
+                        <small style="color:#666">📅 \${new Date(r.timestamp).toLocaleString('fr-FR')}</small><br>
+                        <small style="color:#999">ID: \${r.referred_id}</small>
+                    </div>
+                \`).join('');
+            }
+            
+            document.getElementById('detailsModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('detailsModal').style.display = 'none';
+        }
+
+        function filterTable() {
+            const input = document.getElementById('searchBox');
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById('referralsTable');
+            const tr = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < tr.length; i++) {
+                const td = tr[i].getElementsByTagName('td');
+                let found = false;
+                for (let j = 0; j < td.length; j++) {
+                    if (td[j].innerHTML.toUpperCase().indexOf(filter) > -1) {
+                        found = true;
+                        break;
+                    }
+                }
+                tr[i].style.display = found ? '' : 'none';
+            }
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailsModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+
+        loadReferrals();
+        setInterval(loadReferrals, 30000);
+    </script>
+</body>
+</html>
+'''
+
+# ----------------------- FLASK ROUTES -----------------------
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -822,6 +1127,91 @@ def dashboard():
 @login_required
 def simulate():
     return render_template_string(HTML_SIMULATE)
+
+# ⭐ NOUVELLES ROUTES REFERRALS
+@app.route('/referrals')
+@login_required
+def referrals_page():
+    return render_template_string(HTML_REFERRALS)
+
+@app.route('/api/referrals')
+@login_required
+def api_referrals():
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute("SELECT COUNT(DISTINCT referrer_id) FROM referrals")
+    total_referrers = c.fetchone()[0]
+    
+    c.execute("SELECT COUNT(*) FROM referrals")
+    total_referrals = c.fetchone()[0]
+    
+    c.execute("""SELECT referrer_username, referrer_first_name, COUNT(*) as cnt 
+                 FROM referrals 
+                 GROUP BY referrer_id 
+                 ORDER BY cnt DESC 
+                 LIMIT 1""")
+    top = c.fetchone()
+    top_referrer = f"{top[1]} (@{top[0]}) - {top[2]}" if top else None
+    
+    avg_referrals = total_referrals / total_referrers if total_referrers > 0 else 0
+    
+    c.execute("""SELECT referrer_id, referrer_username, referrer_first_name, COUNT(*) as count
+                 FROM referrals
+                 GROUP BY referrer_id
+                 ORDER BY count DESC""")
+    
+    referrers = []
+    for row in c.fetchall():
+        referrers.append({
+            'referrer_id': row[0],
+            'username': row[1],
+            'first_name': row[2],
+            'count': row[3]
+        })
+    
+    conn.close()
+    
+    return jsonify({
+        'stats': {
+            'total_referrers': total_referrers,
+            'total_referrals': total_referrals,
+            'top_referrer': top_referrer,
+            'avg_referrals': avg_referrals
+        },
+        'referrers': referrers
+    })
+
+@app.route('/api/referrals/<int:referrer_id>')
+@login_required
+def api_referrer_details(referrer_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    c.execute("""SELECT referrer_first_name, referrer_username FROM referrals 
+                 WHERE referrer_id=? LIMIT 1""", (referrer_id,))
+    referrer = c.fetchone()
+    
+    c.execute("""SELECT referred_id, referred_username, referred_first_name, timestamp
+                 FROM referrals
+                 WHERE referrer_id=?
+                 ORDER BY timestamp DESC""", (referrer_id,))
+    
+    referrals = []
+    for row in c.fetchall():
+        referrals.append({
+            'referred_id': row[0],
+            'referred_username': row[1],
+            'referred_first_name': row[2],
+            'timestamp': row[3]
+        })
+    
+    conn.close()
+    
+    return jsonify({
+        'referrer_name': f"{referrer[0]} (@{referrer[1]})" if referrer else "Inconnu",
+        'referrals': referrals
+    })
 
 @app.route('/api/dashboard')
 @login_required
@@ -878,16 +1268,14 @@ def api_dashboard():
 def take_order(order_id):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    # For web admin, mark taken by "web"
     c.execute("UPDATE orders SET status='en_cours', admin_username=?, taken_at=? WHERE id=?", 
               ('web_admin', datetime.now().isoformat(), order_id))
     conn.commit()
     conn.close()
-    # Also edit admin notifications to reflect change
     try:
         edit_notifications_for_order(order_id, f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\nPris en charge via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications after take:", e)
+        print("Erreur edit notifications:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/complete', methods=['POST'])
@@ -901,7 +1289,7 @@ def complete_order(order_id):
     try:
         edit_notifications_for_order(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications after complete:", e)
+        print("Erreur edit notifications:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
@@ -916,7 +1304,7 @@ def cancel_order(order_id):
     try:
         edit_notifications_for_order(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications after cancel:", e)
+        print("Erreur edit notifications:", e)
     return jsonify({'success': True})
 
 @app.route('/')
@@ -927,43 +1315,31 @@ def index():
 def health():
     return jsonify({'status': 'ok', 'bot': 'running'})
 
-# ----------------------- SIMULATE (synchrone Flask) -----------------------
+# ----------------------- SIMULATE SALES -----------------------
 @app.route('/api/simulate', methods=['POST'])
 @login_required
 def api_simulate():
     from datetime import timedelta
 
-    # Robust JSON parsing
     try:
         data = request.get_json(force=True)
         if data is None:
             raise ValueError("Corps JSON vide")
     except Exception as e:
-        err = f"JSON parsing error: {e}"
-        print(err)
         return jsonify({'success': False, 'error': 'invalid_json', 'detail': str(e)}), 400
 
-    # Validate / sanitize inputs
     try:
         count = int(data.get('count', 1))
     except Exception as e:
-        return jsonify({'success': False, 'error': 'invalid_count', 'detail': f"count doit être un entier. valeur reçue: {data.get('count')}"}), 400
+        return jsonify({'success': False, 'error': 'invalid_count'}), 400
 
     service_filter = data.get('service', 'all')
     status = data.get('status', 'terminee')
 
-    allowed_statuses = {'terminee', 'en_cours', 'en_attente', 'annulee'}
-    if status not in allowed_statuses:
-        return jsonify({'success': False, 'error': 'invalid_status', 'detail': f"status doit être parmi {sorted(list(allowed_statuses))}"}), 400
-
-    # Noms aléatoires + méthodes de paiement
-    first_names = ['Lucas', 'Emma', 'Louis', 'Léa', 'Hugo', 'Chloé', 'Arthur', 'Manon', 'Jules', 'Camille',
-                   'Tom', 'Sarah', 'Nathan', 'Laura', 'Paul', 'Marie', 'Alexandre', 'Julie', 'Thomas', 'Sophie']
-    last_names = ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand', 'Leroy', 'Moreau',
-                  'Simon', 'Laurent', 'Lefebvre', 'Michel', 'Garcia', 'David', 'Bertrand', 'Roux', 'Vincent', 'Fournier']
+    first_names = ['Lucas', 'Emma', 'Louis', 'Léa', 'Hugo', 'Chloé', 'Arthur', 'Manon', 'Jules', 'Camille']
+    last_names = ['Martin', 'Bernard', 'Dubois', 'Thomas', 'Robert', 'Richard', 'Petit', 'Durand']
     payment_methods = ['PayPal', 'Virement', 'Revolut']
 
-    # Construire la liste des services/plans disponibles
     services_list = []
     for service_key, service_data in SERVICES_CONFIG.items():
         for plan_key, plan_data in service_data['plans'].items():
@@ -976,24 +1352,18 @@ def api_simulate():
                 'cost': plan_data['cost']
             })
 
-    # Vérifier que le filtre service existe si ce n'est pas 'all'
-    if service_filter != 'all' and not any(s['key'] == service_filter for s in services_list):
-        return jsonify({'success': False, 'error': 'invalid_service', 'detail': f"service inconnu: {service_filter}"}), 400
-
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
 
     created_orders = []
     try:
         for i in range(count):
-            # Choix du service
             if service_filter == 'all':
                 service = random.choice(services_list)
             else:
                 filtered = [s for s in services_list if s['key'] == service_filter]
                 service = random.choice(filtered) if filtered else random.choice(services_list)
 
-            # Générer données aléatoires
             first_name = random.choice(first_names)
             last_name = random.choice(last_names)
             email = f"{first_name.lower()}.{last_name.lower()}{random.randint(1, 999)}@email.com"
@@ -1001,21 +1371,10 @@ def api_simulate():
             username = f"user_{random.randint(1000, 9999)}"
             payment_method = random.choice(payment_methods)
 
-            # Date aléatoire (dernier mois)
             days_ago = random.randint(0, 30)
             timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
 
-            # Insérer la commande en tenant compte des champs spécifiques
-            if service['key'] == 'basicfit':
-                birth_date = f"{random.randint(1, 28):02d}/{random.randint(1, 12):02d}/{random.randint(1980, 2005)}"
-                c.execute("""INSERT INTO orders 
-                             (user_id, username, service, plan, price, cost, timestamp, status,
-                              first_name, last_name, email, birth_date)
-                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                          (user_id, username, service['name'], service['plan_label'],
-                           service['price'], service['cost'], timestamp, status,
-                           first_name, last_name, email, birth_date))
-            elif service['key'] == 'deezer':
+            if service['key'] == 'deezer':
                 c.execute("""INSERT INTO orders 
                              (user_id, username, service, plan, price, cost, timestamp, status,
                               first_name, last_name, email)
@@ -1034,7 +1393,6 @@ def api_simulate():
 
             order_id = c.lastrowid
 
-            # --- Notification aux admins (envoi Telegram via HTTP API) ---
             admin_message = (
                 f"🔔 *NOUVELLE COMMANDE #{order_id}* (simulation)\n\n"
                 f"👤 Client: @{username}\n"
@@ -1077,14 +1435,13 @@ def api_simulate():
                             j = resp.json()
                             if j.get("ok") and j.get("result"):
                                 msg_id = j["result"]["message_id"]
-                                # enregistrer message_id
                                 try:
                                     c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
                                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg_id))
                                 except Exception as e:
                                     print("order_messages insert error:", e)
                     except Exception as e:
-                        print(f"[simulate -> notify admin {admin_id}] Erreur: {e}")
+                        print(f"[simulate notify admin {admin_id}] Erreur: {e}")
 
             created_orders.append({
                 'id': order_id,
@@ -1097,9 +1454,9 @@ def api_simulate():
     except Exception as e:
         conn.rollback()
         tb = traceback.format_exc()
-        print("Erreur lors de la génération des commandes:", e)
+        print("Erreur génération commandes:", e)
         print(tb)
-        return jsonify({'success': False, 'error': 'exception_during_insert', 'detail': str(e), 'trace': tb}), 500
+        return jsonify({'success': False, 'error': 'exception_during_insert', 'detail': str(e)}), 500
 
     finally:
         conn.close()
@@ -1108,16 +1465,111 @@ def api_simulate():
 
 # ----------------------- TELEGRAM BOT HANDLERS -----------------------
 
+# ⭐ HANDLER /parrainage
+async def parrainage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Génère le lien de parrainage pour l'utilisateur"""
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or f"User_{user_id}"
+    first_name = update.message.from_user.first_name or "Utilisateur"
+    
+    referral_code = f"REF_{user_id}"
+    bot_username = context.bot.username
+    referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+    
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user_id,))
+    count = c.fetchone()[0]
+    conn.close()
+    
+    message = (
+        f"🎁 *TON LIEN DE PARRAINAGE*\n\n"
+        f"👤 {first_name} (@{username})\n\n"
+        f"🔗 Ton lien unique :\n`{referral_link}`\n\n"
+        f"📊 Statistiques :\n"
+        f"✅ {count} personne(s) parrainée(s)\n\n"
+        f"💡 *Comment ça marche ?*\n"
+        f"1. Partage ce lien à tes amis\n"
+        f"2. Quand ils l'utilisent, tu es crédité\n"
+        f"3. Contacte l'admin pour tes récompenses !\n\n"
+        f"Plus tu parraines, plus tu gagnes ! 🚀"
+    )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
+# ⭐ HANDLER /start modifié pour détecter les parrainages
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    print(f"[BOT] /start appelé par {user_id}")
+    username = update.message.from_user.username or f"User_{user_id}"
+    first_name = update.message.from_user.first_name or "Utilisateur"
     
-    # Organiser les services par catégories + Basic Fit en direct
+    # Détecter code de parrainage
+    referral_code = None
+    if context.args and len(context.args) > 0:
+        potential_code = context.args[0]
+        if potential_code.startswith("REF_"):
+            referral_code = potential_code
+    
+    # Si code de parrainage
+    if referral_code:
+        try:
+            referrer_id = int(referral_code.replace("REF_", ""))
+            
+            if referrer_id != user_id:
+                conn = sqlite3.connect('orders.db', check_same_thread=False)
+                c = conn.cursor()
+                
+                c.execute("SELECT id FROM referrals WHERE referred_id=?", (user_id,))
+                existing = c.fetchone()
+                
+                if not existing:
+                    # Récupérer infos du parrain
+                    try:
+                        referrer_info = await context.bot.get_chat(referrer_id)
+                        referrer_username = referrer_info.username or f"User_{referrer_id}"
+                        referrer_first_name = referrer_info.first_name or "Inconnu"
+                    except:
+                        referrer_username = f"User_{referrer_id}"
+                        referrer_first_name = "Inconnu"
+                    
+                    # Enregistrer le parrainage
+                    c.execute("""INSERT INTO referrals 
+                                 (referrer_id, referrer_username, referrer_first_name,
+                                  referred_id, referred_username, referred_first_name,
+                                  referral_code, timestamp)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                              (referrer_id, referrer_username, referrer_first_name,
+                               user_id, username, first_name,
+                               referral_code, datetime.now().isoformat()))
+                    conn.commit()
+                    
+                    # Notifier le parrain
+                    try:
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=f"🎉 *NOUVEAU FILLEUL !*\n\n👤 {first_name} (@{username}) vient de s'inscrire via ton lien de parrainage !\n\n✅ Continue de partager pour gagner plus ! 🚀",
+                            parse_mode='Markdown'
+                        )
+                    except:
+                        pass
+                    
+                    await update.message.reply_text(
+                        f"🎁 *Bienvenue {first_name} !*\n\n"
+                        f"Tu as été parrainé par @{referrer_username} !\n\n"
+                        f"Choisis un service ci-dessous pour commencer 👇",
+                        parse_mode='Markdown'
+                    )
+                
+                conn.close()
+        except:
+            pass
+    
+    # Menu principal
     keyboard = [
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
         [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-        [InlineKeyboardButton("🏋️ Basic Fit", callback_data="service_basicfit")]
+        [InlineKeyboardButton("🎁 Mon lien de parrainage", callback_data="show_referral")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1127,9 +1579,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Profite de nos offres premium à prix réduits :\n"
         "• Comptes streaming\n"
         "• Abonnements musique\n"
-        "• Services IA\n"
-        "• Abonnement sport\n\n"
-        "Choisis une catégorie ou un service pour commencer :"
+        "• Services IA\n\n"
+        "💡 Parraine tes amis et gagne des récompenses !\n\n"
+        "Choisis une catégorie pour commencer :"
     )
     
     await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
@@ -1139,6 +1591,35 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = query.from_user.id
+    
+    # ⭐ Afficher le lien de parrainage
+    if data == "show_referral":
+        username = query.from_user.username or f"User_{user_id}"
+        first_name = query.from_user.first_name or "Utilisateur"
+        
+        referral_code = f"REF_{user_id}"
+        bot_username = context.bot.username
+        referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+        
+        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user_id,))
+        count = c.fetchone()[0]
+        conn.close()
+        
+        message = (
+            f"🎁 *TON LIEN DE PARRAINAGE*\n\n"
+            f"👤 {first_name} (@{username})\n\n"
+            f"🔗 Ton lien :\n`{referral_link}`\n\n"
+            f"📊 {count} filleul(s)\n\n"
+            f"Partage-le pour gagner ! 🚀"
+        )
+        
+        keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="back_to_menu")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        return
     
     # Catégories
     if data.startswith("cat_"):
@@ -1205,7 +1686,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'step': 'waiting_form'
         }
         
-        # Formulaires spécifiques pour Deezer et Basic Fit
+        # Formulaire Deezer
         if service_key == 'deezer':
             await query.edit_message_text(
                 f"✅ *Commande confirmée*\n\nService: {service['name']}\nPlan: {plan['label']}\nPrix: {plan['price']}€\n\n📝 Envoie ton nom, prénom et mail (chacun sur une ligne)",
@@ -1214,15 +1695,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             user_states[user_id]['step'] = 'waiting_deezer_form'
             return
         
-        elif service_key == 'basicfit':
-            await query.edit_message_text(
-                f"✅ *Commande confirmée*\n\nService: {service['name']}\nPlan: {plan['label']}\nPrix: {plan['price']}€\n\n📝 Étape 1/4\n\nEnvoie ton *nom de famille* :",
-                parse_mode='Markdown'
-            )
-            user_states[user_id]['step'] = 'basicfit_nom'
-            return
-        
-        # Formulaire standard pour tous les autres services
+        # Formulaire standard
         else:
             form_text = (
                 f"✅ *{plan['label']} - {plan['price']}€*\n\n"
@@ -1247,7 +1720,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
             [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-            [InlineKeyboardButton("🏋️ Basic Fit", callback_data="service_basicfit")]
+            [InlineKeyboardButton("🎁 Mon lien de parrainage", callback_data="show_referral")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -1257,30 +1730,27 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # --- Gestion des actions admin (depuis les messages envoyés aux admins) ---
+    # Actions admin
     if data.startswith("admin_"):
-        # Ex: admin_take_123
         parts = data.split("_")
         if len(parts) < 3:
             await query.answer("Données invalides", show_alert=True)
             return
 
-        action = parts[1]  # 'take' / 'complete' / 'cancel'
+        action = parts[1]
         try:
             order_id = int(parts[2])
         except ValueError:
-            await query.answer("ID de commande invalide", show_alert=True)
+            await query.answer("ID invalide", show_alert=True)
             return
 
         admin_user_id = query.from_user.id
         admin_username = query.from_user.username or (query.from_user.first_name or "").strip()
 
-        # Vérifier que l'utilisateur est admin
         if admin_user_id not in ADMIN_IDS:
-            await query.answer("Tu n'es pas autorisé à effectuer cette action", show_alert=True)
+            await query.answer("Non autorisé", show_alert=True)
             return
 
-        # Récupérer la commande (détails)
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("SELECT service, plan, price FROM orders WHERE id=?", (order_id,))
@@ -1291,7 +1761,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         service_name, plan_label, price = row
 
-        # Mettre à jour le statut en base et préparer le nouveau texte
         timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
         if action == "take":
             c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
@@ -1314,10 +1783,10 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\n"
                 f"Traitée par @{admin_username}\n"
                 f"📦 {service_name} — {plan_label}\n"
-                f"💰 Montant: {price}€\n\n"
+                f"💰 {price}€\n\n"
                 f"🕒 {timestamp}"
             )
-            answer_text = "Commande marquée terminée ✅"
+            answer_text = "Commande terminée ✅"
 
         elif action == "cancel":
             c.execute("UPDATE orders SET status='annulee', cancelled_by=?, cancelled_at=? WHERE id=?",
@@ -1336,7 +1805,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Action inconnue", show_alert=True)
             return
 
-        # Récupérer tous les message_ids liés à cette commande et éditer chaque notification
         try:
             c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
             rows = c.fetchall()
@@ -1349,14 +1817,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         parse_mode='Markdown'
                     )
                 except Exception as e:
-                    # Si l'édition échoue (message supprimé, etc.), log juste l'erreur
-                    print(f"[edit_message] Erreur pour admin {admin_chat_id} msg {message_id}: {e}")
+                    print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
         except Exception as e:
             print(f"[fetch order_messages] Erreur: {e}")
         finally:
             conn.close()
 
-        # Répondre au callback pour confirmer l'action
         await query.answer(answer_text)
         return
 
@@ -1377,7 +1843,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     state = user_states[user_id]
     
-    # Formulaire Deezer (3 champs)
+    # Formulaire Deezer
     if state.get('step') == 'waiting_deezer_form':
         lines = text.strip().split('\n')
         if len(lines) < 3:
@@ -1397,7 +1863,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         order_id = c.lastrowid
         conn.commit()
 
-        # Notify all admins and record message_ids
         for admin_id in ADMIN_IDS:
             try:
                 admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
@@ -1428,20 +1893,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     reply_markup=keyboard
                 )
 
-                # Enregistrer message_id
                 try:
                     conn2 = sqlite3.connect('orders.db', check_same_thread=False)
                     c2 = conn2.cursor()
                     c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
                                   VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
                     conn2.commit()
+                    conn2.close()
                 except Exception as e:
                     print(f"[order_messages insert] Erreur: {e}")
-                finally:
-                    try:
-                        conn2.close()
-                    except:
-                        pass
 
             except Exception as e:
                 print(f"Erreur envoi admin: {e}")
@@ -1452,165 +1912,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         del user_states[user_id]
         return
     
-    # Formulaire Basic Fit (legacy)
-    if state.get('step') == 'waiting_basicfit_form':
-        lines = text.strip().split('\n')
-        if len(lines) < 4:
-            await update.message.reply_text("❌ Envoie les 4 informations : Nom, Prénom, Mail, Date de naissance")
-            return
-        
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
-        c = conn.cursor()
-        c.execute("""INSERT INTO orders 
-                     (user_id, username, service, plan, price, cost, timestamp, status,
-                      first_name, last_name, email, birth_date)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
-                  (user_id, username, state['service_name'], state['plan_label'], 
-                   state['price'], state['cost'], datetime.now().isoformat(),
-                   lines[1].strip(), lines[0].strip(), lines[2].strip(), lines[3].strip()))
-        
-        order_id = c.lastrowid
-        conn.commit()
-
-        for admin_id in ADMIN_IDS:
-            try:
-                admin_text = (
-                    f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
-                    f"👤 @{username}\n"
-                    f"📦 {state['service_name']}\n"
-                    f"💰 {state['price']}€\n"
-                    f"💵 Coût: {state['cost']}€\n"
-                    f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
-                    f"👤 {lines[1].strip()} {lines[0].strip()}\n"
-                    f"📧 {lines[2].strip()}\n"
-                    f"🎂 {lines[3].strip()}\n"
-                    f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                )
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
-                ]])
-                msg = await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
-                try:
-                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
-                    c2 = conn2.cursor()
-                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
-                    conn2.commit()
-                except Exception as e:
-                    print(f"[order_messages insert] Erreur: {e}")
-                finally:
-                    try:
-                        conn2.close()
-                    except:
-                        pass
-            except Exception as e:
-                print(f"Erreur envoi admin: {e}")
-        
-        conn.close()
-        
-        await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
-        del user_states[user_id]
-        return
-
-    # Basic Fit step-by-step
-    if state.get('step') == 'basicfit_nom':
-        user_states[user_id]['last_name'] = text.strip()
-        user_states[user_id]['step'] = 'basicfit_prenom'
-        await update.message.reply_text("✅ Nom enregistré !\n\n📝 Étape 2/4\n\nEnvoie ton *prénom* :", parse_mode='Markdown')
-        return
-    
-    if state.get('step') == 'basicfit_prenom':
-        user_states[user_id]['first_name'] = text.strip()
-        user_states[user_id]['step'] = 'basicfit_email'
-        await update.message.reply_text("✅ Prénom enregistré !\n\n📝 Étape 3/4\n\nEnvoie ton *email* :", parse_mode='Markdown')
-        return
-    
-    if state.get('step') == 'basicfit_email':
-        if '@' not in text:
-            await update.message.reply_text("❌ Email invalide. Envoie un email valide :")
-            return
-        user_states[user_id]['email'] = text.strip()
-        user_states[user_id]['step'] = 'basicfit_birthdate'
-        await update.message.reply_text("✅ Email enregistré !\n\n📝 Étape 4/4\n\nEnvoie ta *date de naissance* (format: JJ/MM/AAAA) :", parse_mode='Markdown')
-        return
-    
-    if state.get('step') == 'basicfit_birthdate':
-        birth_date = text.strip()
-        
-        # Enregistrer la commande
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
-        c = conn.cursor()
-        c.execute("""INSERT INTO orders 
-                     (user_id, username, service, plan, price, cost, timestamp, status,
-                      first_name, last_name, email, birth_date)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, 'en_attente', ?, ?, ?, ?)""",
-                  (user_id, username, state['service_name'], state['plan_label'], 
-                   state['price'], state['cost'], datetime.now().isoformat(),
-                   state['first_name'], state['last_name'], state['email'], birth_date))
-        
-        order_id = c.lastrowid
-        conn.commit()
-
-        for admin_id in ADMIN_IDS:
-            try:
-                admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
-                if update.message.from_user.username:
-                    admin_text += f"👤 @{username}\n"
-                else:
-                    admin_text += f"👤 {full_name_tg} (ID: {user_id})\n"
-                admin_text += (
-                    f"📦 {state['service_name']}\n"
-                    f"💰 {state['price']}€\n"
-                    f"💵 Coût: {state['cost']}€\n"
-                    f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
-                    f"👤 {state['first_name']} {state['last_name']}\n"
-                    f"📧 {state['email']}\n"
-                    f"🎂 {birth_date}\n"
-                    f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-                )
-                
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
-                ]])
-
-                msg = await context.bot.send_message(
-                    chat_id=admin_id,
-                    text=admin_text,
-                    parse_mode='Markdown',
-                    reply_markup=keyboard
-                )
-                try:
-                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
-                    c2 = conn2.cursor()
-                    c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                                  VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
-                    conn2.commit()
-                except Exception as e:
-                    print(f"[order_messages insert] Erreur: {e}")
-                finally:
-                    try:
-                        conn2.close()
-                    except:
-                        pass
-            except Exception as e:
-                print(f"Erreur envoi admin: {e}")
-        
-        conn.close()
-        
-        await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci pour ta confiance ! 🙏", parse_mode='Markdown')
-        del user_states[user_id]
-        return
-    
-    # Formulaire standard pour les autres services (4 champs)
+    # Formulaire standard
     if state.get('step') == 'waiting_form':
         lines = [line.strip() for line in text.strip().split('\n') if line.strip()]
         
@@ -1631,7 +1933,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         email = lines[2]
         payment_method = lines[3]
         
-        # Validation basique
         if '@' not in email:
             await update.message.reply_text("❌ Email invalide. Recommence avec un email valide.")
             return
@@ -1644,7 +1945,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
         
-        # Enregistrer la commande
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
@@ -1658,7 +1958,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         order_id = c.lastrowid
         conn.commit()
 
-        # Notification admins (tous) + save message ids
         admin_message = (
             f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
             f"👤 Client: @{username}\n"
@@ -1693,19 +1992,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
                                   VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
                     conn2.commit()
+                    conn2.close()
                 except Exception as e:
                     print(f"[order_messages insert] Erreur: {e}")
-                finally:
-                    try:
-                        conn2.close()
-                    except:
-                        pass
             except Exception as e:
                 print(f"[ERREUR] Notification admin {admin_id}: {e}")
         
         conn.close()
         
-        # Confirmation client
         confirmation_message = (
             f"✅ *Commande #{order_id} enregistrée !*\n\n"
             f"📦 {state['plan_label']}\n"
@@ -1718,17 +2012,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         await update.message.reply_text(confirmation_message, parse_mode='Markdown')
         
-        # Nettoyer l'état
         del user_states[user_id]
         return
 
-# ----------------------- Helper to edit notifications for all admins -----------------------
+# ----------------------- Helper edit notifications -----------------------
 def edit_notifications_for_order(order_id: int, new_text: str):
-    """
-    Édite toutes les notifications (order_messages) pour une commande donnée,
-    en remplaçant le texte par new_text. Utilisé par le dashboard sync routes.
-    """
-    # Use Telegram HTTP API to edit messages (synchronous)
+    """Édite toutes les notifications pour une commande (HTTP API sync)"""
     if not BOT_TOKEN:
         return
 
@@ -1750,45 +2039,30 @@ def edit_notifications_for_order(order_id: int, new_text: str):
                     timeout=10
                 )
             except Exception as e:
-                print(f"[edit_notifications_for_order] Erreur edit admin {admin_chat_id} msg {message_id}: {e}")
+                print(f"[edit_notifications] Erreur admin {admin_chat_id} msg {message_id}: {e}")
     except Exception as e:
         print("Erreur récupérer order_messages:", e)
     finally:
         conn.close()
 
-# ----------------------- Bot runner (fixed) -----------------------
+# ----------------------- Bot runner -----------------------
 def run_bot():
-    """
-    Start the telegram bot in a dedicated thread with its own asyncio event loop.
-
-    The error "There is no current event loop in thread 'TelegramBotPolling'" occurs when
-    Application.run_polling() is called from a thread that doesn't have an asyncio loop set.
-    We create a new loop for this thread and run the polling coroutine inside it.
-
-    Additionally, Application.run_polling tries to register signal handlers using
-    loop.add_signal_handler(), which raises a RuntimeError when called from a non-main
-    thread ("set_wakeup_fd only works in main thread of the main interpreter").
-    To avoid that, pass stop_signals=None (or an empty tuple) so the library won't attempt
-    to register signal handlers from this non-main thread.
-    """
+    """Démarre le bot Telegram dans un thread séparé avec event loop dédié"""
     if not BOT_TOKEN:
-        print("BOT_TOKEN non configuré - le bot Telegram ne sera pas démarré.")
+        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
         return
     try:
         import asyncio
-        # Create and set an event loop specifically for this thread
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
         app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CommandHandler("parrainage", parrainage_command))  # ⭐ NOUVEAU
         app_bot.add_handler(CallbackQueryHandler(button_callback))
         app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
         print("🤖 Démarrage du bot Telegram (polling)...")
-        # run_polling is an async coroutine; run it on this thread's loop
-        # IMPORTANT: when running in a non-main thread we must disable signal handling to avoid:
-        # "set_wakeup_fd only works in main thread of the main interpreter"
         loop.run_until_complete(
             app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
         )
@@ -1797,7 +2071,6 @@ def run_bot():
         print(f"❌ Erreur critique du bot: {e}")
         traceback.print_exc()
     finally:
-        # try to shut down async generators and close the loop cleanly
         try:
             loop.run_until_complete(loop.shutdown_asyncgens())
         except Exception:
