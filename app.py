@@ -1045,21 +1045,21 @@ HTML_REFERRALS = '''<!DOCTYPE html>
         }
 
         async function showDetails(referrerId, name, username) {
-            const response = await fetch(\`/api/referrals/\${referrerId}\`);
+            const response = await fetch(`/api/referrals/${referrerId}`);
             const data = await response.json();
             
-            document.getElementById('modal-title').textContent = \`🎁 Filleuls de \${name} (\${username})\`;
+            document.getElementById('modal-title').textContent = `🎁 Filleuls de ${name} (${username})`;
             
             if (data.referrals.length === 0) {
                 document.getElementById('modal-body').innerHTML = '<p style="text-align:center;color:#999;padding:40px">Aucun filleul</p>';
             } else {
-                document.getElementById('modal-body').innerHTML = data.referrals.map(r => \`
+                document.getElementById('modal-body').innerHTML = data.referrals.map(r => `
                     <div class="filleul-item">
-                        <strong>👤 \${r.referred_first_name || 'Inconnu'}</strong> (@\${r.referred_username})<br>
-                        <small style="color:#666">📅 \${new Date(r.timestamp).toLocaleString('fr-FR')}</small><br>
-                        <small style="color:#999">ID: \${r.referred_id}</small>
+                        <strong>👤 ${r.referred_first_name || 'Inconnu'}</strong> (@${r.referred_username})<br>
+                        <small style="color:#666">📅 ${new Date(r.timestamp).toLocaleString('fr-FR')}</small><br>
+                        <small style="color:#999">ID: ${r.referred_id}</small>
                     </div>
-                \`).join('');
+                `).join('');
             }
             
             document.getElementById('detailsModal').style.display = 'block';
@@ -1473,8 +1473,8 @@ async def parrainage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     first_name = update.message.from_user.first_name or "Utilisateur"
     
     referral_code = f"REF_{user_id}"
-    bot_username = context.bot.username
-    referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+    # Forcer le lien vers t.me/B4Udeal (avec param start pour conserver le code)
+    referral_link = f"https://t.me/B4Udeal?start={referral_code}"
     
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
@@ -1490,9 +1490,8 @@ async def parrainage_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"✅ {count} personne(s) parrainée(s)\n\n"
         f"💡 *Comment ça marche ?*\n"
         f"1. Partage ce lien à tes amis\n"
-        f"2. Quand ils l'utilisent, tu es crédité\n"
-        f"3. Contacte l'admin pour tes récompenses !\n\n"
-        f"Plus tu parraines, plus tu gagnes ! 🚀"
+        f"2. 5 invitations: Tech ps5 ou tech uber\n"
+        f"3. Contacte @Noalloo ou @Ssko47 pour tes récompenses !\n\n"
     )
     
     await update.message.reply_text(message, parse_mode='Markdown')
@@ -1598,8 +1597,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         first_name = query.from_user.first_name or "Utilisateur"
         
         referral_code = f"REF_{user_id}"
-        bot_username = context.bot.username
-        referral_link = f"https://t.me/{bot_username}?start={referral_code}"
+        # Forcer le lien vers t.me/B4Udeal (avec param start pour conserver le code)
+        referral_link = f"https://t.me/B4Udeal?start={referral_code}"
         
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
