@@ -1,8 +1,8 @@
-# Full app.py avec système de parrainage et sans Basic Fit
-# - Basic Fit retiré
-# - Système de parrainage manuel avec dashboard /referrals
-# - Détection automatique des parrainages via /start REF_xxxxx
-# - Admin peut voir tous les parrainages et statistiques
+# Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives
+# - Système de parrainage RETIRÉ
+# - Dashboard utilisateurs avancé avec recherche
+# - Gestion complète des commandes depuis Telegram (prendre/annuler/remettre en ligne)
+# - Stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
 
 import os
 import sqlite3
@@ -24,7 +24,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# ⭐ SERVICES_CONFIG sans Basic Fit
+# SERVICES_CONFIG
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -130,7 +130,7 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# ⭐ DATABASE avec table referrals
+# DATABASE avec table users + statistiques cumulatives
 def init_db():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
@@ -161,18 +161,28 @@ def init_db():
                   admin_id INTEGER,
                   message_id INTEGER)''')
     
-    # ⭐ NOUVELLE TABLE REFERRALS
-    c.execute('''CREATE TABLE IF NOT EXISTS referrals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  referrer_id INTEGER,
-                  referrer_username TEXT,
-                  referrer_first_name TEXT,
-                  referred_id INTEGER,
-                  referred_username TEXT,
-                  referred_first_name TEXT,
-                  referral_code TEXT,
-                  timestamp TEXT,
-                  UNIQUE(referred_id))''')
+    # Nouvelle table users pour tracking
+    c.execute('''CREATE TABLE IF NOT EXISTS users
+                 (user_id INTEGER PRIMARY KEY,
+                  username TEXT,
+                  first_name TEXT,
+                  last_name TEXT,
+                  first_seen TEXT,
+                  last_activity TEXT,
+                  total_orders INTEGER DEFAULT 0)''')
+    
+    # Table pour stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
+    c.execute('''CREATE TABLE IF NOT EXISTS cumulative_stats
+                 (id INTEGER PRIMARY KEY CHECK (id = 1),
+                  total_revenue REAL DEFAULT 0,
+                  total_profit REAL DEFAULT 0,
+                  last_updated TEXT)''')
+    
+    # Initialiser les stats cumulatives si pas encore fait
+    c.execute("SELECT COUNT(*) FROM cumulative_stats WHERE id=1")
+    if c.fetchone()[0] == 0:
+        c.execute("INSERT INTO cumulative_stats (id, total_revenue, total_profit, last_updated) VALUES (1, 0, 0, ?)",
+                  (datetime.now().isoformat(),))
     
     conn.commit()
     conn.close()
@@ -286,7 +296,7 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             display: flex;
             gap: 10px;
         }
-        .logout-btn, .simulate-btn, .referral-btn {
+        .logout-btn, .simulate-btn, .users-btn {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 10px 20px;
@@ -298,8 +308,8 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
         .simulate-btn {
             background: rgba(255,255,255,0.3);
         }
-        .referral-btn {
-            background: rgba(255,200,0,0.3);
+        .users-btn {
+            background: rgba(100,200,255,0.3);
         }
         .container {
             max-width: 1400px;
@@ -330,6 +340,12 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             font-size: 32px;
             font-weight: bold;
             color: #667eea;
+        }
+        .stat-card.cumulative {
+            border-left-color: #10b981;
+        }
+        .stat-card.cumulative .value {
+            color: #10b981;
         }
         .orders-section {
             background: white;
@@ -457,7 +473,7 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
     <div class="header">
         <h1>🎯 B4U Deals - Dashboard Admin</h1>
         <div class="header-actions">
-            <a href="/referrals" class="referral-btn">🎁 Parrainages</a>
+            <a href="/users" class="users-btn">👥 Utilisateurs</a>
             <a href="/simulate" class="simulate-btn">🎲 Simuler</a>
             <a href="/logout" class="logout-btn">Déconnexion</a>
         </div>
@@ -481,12 +497,12 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
                 <h3>✅ Terminées</h3>
                 <div class="value" id="completed-orders">0</div>
             </div>
-            <div class="stat-card">
-                <h3>💰 Chiffre d'Affaires</h3>
+            <div class="stat-card cumulative">
+                <h3>💰 CA Total (Cumulé)</h3>
                 <div class="value" id="revenue">0€</div>
             </div>
-            <div class="stat-card">
-                <h3>💵 Bénéfice</h3>
+            <div class="stat-card cumulative">
+                <h3>💵 Bénéfice Total (Cumulé)</h3>
                 <div class="value" id="profit">0€</div>
             </div>
         </div>
@@ -804,13 +820,13 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </html>
 '''
 
-# ⭐ NOUVEAU: PAGE REFERRALS
-HTML_REFERRALS = '''<!DOCTYPE html>
+# NOUVELLE PAGE: Dashboard Utilisateurs
+HTML_USERS = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Parrainages - B4U Deals</title>
+    <title>Utilisateurs - B4U Deals</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
@@ -860,7 +876,7 @@ HTML_REFERRALS = '''<!DOCTYPE html>
             font-weight: bold;
             color: #667eea;
         }
-        .referrals-section {
+        .users-section {
             background: white;
             padding: 25px;
             border-radius: 15px;
@@ -882,26 +898,6 @@ HTML_REFERRALS = '''<!DOCTYPE html>
         }
         tr:hover {
             background: #f9fafb;
-        }
-        .badge {
-            display: inline-block;
-            padding: 5px 12px;
-            border-radius: 20px;
-            font-size: 12px;
-            font-weight: 600;
-            margin-left: 8px;
-        }
-        .badge-gold {
-            background: #ffd700;
-            color: #333;
-        }
-        .badge-silver {
-            background: #c0c0c0;
-            color: #333;
-        }
-        .badge-bronze {
-            background: #cd7f32;
-            color: white;
         }
         .search-box {
             margin-bottom: 20px;
@@ -954,55 +950,73 @@ HTML_REFERRALS = '''<!DOCTYPE html>
         .close:hover {
             color: #000;
         }
-        .filleul-item {
+        .order-item {
             padding: 12px;
             background: #f9fafb;
             border-radius: 8px;
             margin-bottom: 10px;
             border-left: 4px solid #667eea;
         }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .badge-active {
+            background: #d1e7dd;
+            color: #0f5132;
+        }
+        .badge-inactive {
+            background: #f8d7da;
+            color: #842029;
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>🎁 Système de Parrainage</h1>
+        <h1>👥 Gestion des Utilisateurs</h1>
         <a href="/dashboard" class="back-btn">← Dashboard</a>
     </div>
 
     <div class="container">
         <div class="stats-grid">
             <div class="stat-card">
-                <h3>👥 Total Parrains</h3>
-                <div class="value" id="total-referrers">0</div>
+                <h3>👥 Total Utilisateurs</h3>
+                <div class="value" id="total-users">0</div>
             </div>
             <div class="stat-card">
-                <h3>🎯 Total Filleuls</h3>
-                <div class="value" id="total-referrals">0</div>
+                <h3>🛒 Clients Actifs</h3>
+                <div class="value" id="active-users">0</div>
             </div>
             <div class="stat-card">
-                <h3>🏆 Top Parrain</h3>
-                <div class="value" id="top-referrer" style="font-size:18px">-</div>
+                <h3>📈 Taux Conversion</h3>
+                <div class="value" id="conversion-rate">0%</div>
             </div>
             <div class="stat-card">
-                <h3>📈 Moy. par Parrain</h3>
-                <div class="value" id="avg-referrals">0</div>
+                <h3>🆕 Nouveaux (7j)</h3>
+                <div class="value" id="new-users">0</div>
             </div>
         </div>
 
-        <div class="referrals-section">
-            <h2 style="margin-bottom:20px">📊 Classement des Parrains</h2>
-            <input type="text" class="search-box" id="searchBox" placeholder="🔍 Rechercher un parrain..." onkeyup="filterTable()">
-            <table id="referralsTable">
+        <div class="users-section">
+            <h2 style="margin-bottom:20px">📊 Liste des Utilisateurs</h2>
+            <input type="text" class="search-box" id="searchBox" placeholder="🔍 Rechercher un utilisateur..." onkeyup="filterTable()">
+            <table id="usersTable">
                 <thead>
                     <tr>
-                        <th>🏅 Rang</th>
-                        <th>👤 Parrain</th>
+                        <th>👤 Utilisateur</th>
                         <th>📞 Telegram</th>
-                        <th>🎯 Filleuls</th>
+                        <th>📊 Statut</th>
+                        <th>🛒 Commandes</th>
+                        <th>📅 Première visite</th>
+                        <th>🕐 Dernière activité</th>
                         <th>📋 Actions</th>
                     </tr>
                 </thead>
-                <tbody id="referrals-body"></tbody>
+                <tbody id="users-body"></tbody>
             </table>
         </div>
     </div>
@@ -1016,48 +1030,51 @@ HTML_REFERRALS = '''<!DOCTYPE html>
     </div>
 
     <script>
-        async function loadReferrals() {
-            const response = await fetch('/api/referrals');
+        async function loadUsers() {
+            const response = await fetch('/api/users');
             const data = await response.json();
             
-            document.getElementById('total-referrers').textContent = data.stats.total_referrers;
-            document.getElementById('total-referrals').textContent = data.stats.total_referrals;
-            document.getElementById('top-referrer').textContent = data.stats.top_referrer || '-';
-            document.getElementById('avg-referrals').textContent = data.stats.avg_referrals.toFixed(1);
+            document.getElementById('total-users').textContent = data.stats.total_users;
+            document.getElementById('active-users').textContent = data.stats.active_users;
+            document.getElementById('conversion-rate').textContent = data.stats.conversion_rate + '%';
+            document.getElementById('new-users').textContent = data.stats.new_users;
             
-            const tbody = document.getElementById('referrals-body');
-            tbody.innerHTML = data.referrers.map((r, index) => {
-                let badge = '';
-                if (index === 0) badge = '<span class="badge badge-gold">🥇 1er</span>';
-                else if (index === 1) badge = '<span class="badge badge-silver">🥈 2ème</span>';
-                else if (index === 2) badge = '<span class="badge badge-bronze">🥉 3ème</span>';
+            const tbody = document.getElementById('users-body');
+            tbody.innerHTML = data.users.map(u => {
+                const isActive = u.total_orders > 0;
+                const badge = isActive ? 
+                    '<span class="badge badge-active">✅ Client</span>' : 
+                    '<span class="badge badge-inactive">❌ Inactif</span>';
                 
                 return `
                     <tr>
-                        <td><strong>${index + 1}</strong>${badge}</td>
-                        <td>${r.first_name || 'Inconnu'}</td>
-                        <td>@${r.username} <br><small style="color:#999">ID: ${r.referrer_id}</small></td>
-                        <td><strong style="color:#667eea;font-size:18px">${r.count}</strong> personne(s)</td>
-                        <td><button class="btn-view" onclick="showDetails(${r.referrer_id}, '${r.first_name}', '@${r.username}')">👁️ Voir</button></td>
+                        <td><strong>${u.first_name || 'Inconnu'} ${u.last_name || ''}</strong></td>
+                        <td>@${u.username || 'N/A'} <br><small style="color:#999">ID: ${u.user_id}</small></td>
+                        <td>${badge}</td>
+                        <td><strong style="color:#667eea;font-size:18px">${u.total_orders}</strong></td>
+                        <td>${new Date(u.first_seen).toLocaleDateString('fr-FR')}</td>
+                        <td>${new Date(u.last_activity).toLocaleDateString('fr-FR')}</td>
+                        <td><button class="btn-view" onclick="showDetails(${u.user_id}, '${u.first_name}', '@${u.username}')">👁️ Voir</button></td>
                     </tr>
                 `;
             }).join('');
         }
 
-        async function showDetails(referrerId, name, username) {
-            const response = await fetch(`/api/referrals/${referrerId}`);
+        async function showDetails(userId, name, username) {
+            const response = await fetch(`/api/users/${userId}`);
             const data = await response.json();
             
-            document.getElementById('modal-title').textContent = `🎁 Filleuls de ${name} (${username})`;
+            document.getElementById('modal-title').textContent = `📋 Commandes de ${name} (${username})`;
             
-            if (data.referrals.length === 0) {
-                document.getElementById('modal-body').innerHTML = '<p style="text-align:center;color:#999;padding:40px">Aucun filleul</p>';
+            if (data.orders.length === 0) {
+                document.getElementById('modal-body').innerHTML = '<p style="text-align:center;color:#999;padding:40px">Aucune commande</p>';
             } else {
-                document.getElementById('modal-body').innerHTML = data.referrals.map(r => `
-                    <div class="filleul-item">
-                        <strong>👤 ${r.referred_first_name || 'Inconnu'}</strong> (@${r.referred_username})<br>
-                        <small style="color:#666">📅 ${new Date(r.timestamp).toLocaleString('fr-FR')}</small><br>
-                        <small style="color:#999">ID: ${r.referred_id}</small>
+                document.getElementById('modal-body').innerHTML = data.orders.map(o => `
+                    <div class="order-item">
+                        <strong>#${o.id} - ${o.service}</strong><br>
+                        <small style="color:#666">📦 ${o.plan} - ${o.price}€</small><br>
+                        <small style="color:#666">📅 ${new Date(o.timestamp).toLocaleString('fr-FR')}</small><br>
+                        <small style="color:#999">Statut: ${o.status}</small>
                     </div>
                 `).join('');
             }
@@ -1072,7 +1089,7 @@ HTML_REFERRALS = '''<!DOCTYPE html>
         function filterTable() {
             const input = document.getElementById('searchBox');
             const filter = input.value.toUpperCase();
-            const table = document.getElementById('referralsTable');
+            const table = document.getElementById('usersTable');
             const tr = table.getElementsByTagName('tr');
             
             for (let i = 1; i < tr.length; i++) {
@@ -1095,8 +1112,8 @@ HTML_REFERRALS = '''<!DOCTYPE html>
             }
         }
 
-        loadReferrals();
-        setInterval(loadReferrals, 30000);
+        loadUsers();
+        setInterval(loadUsers, 30000);
     </script>
 </body>
 </html>
@@ -1128,90 +1145,84 @@ def dashboard():
 def simulate():
     return render_template_string(HTML_SIMULATE)
 
-# ⭐ NOUVELLES ROUTES REFERRALS
-@app.route('/referrals')
+@app.route('/users')
 @login_required
-def referrals_page():
-    return render_template_string(HTML_REFERRALS)
+def users_page():
+    return render_template_string(HTML_USERS)
 
-@app.route('/api/referrals')
+# API USERS
+@app.route('/api/users')
 @login_required
-def api_referrals():
+def api_users():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    c.execute("SELECT COUNT(DISTINCT referrer_id) FROM referrals")
-    total_referrers = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
     
-    c.execute("SELECT COUNT(*) FROM referrals")
-    total_referrals = c.fetchone()[0]
+    c.execute("SELECT COUNT(*) FROM users WHERE total_orders > 0")
+    active_users = c.fetchone()[0]
     
-    c.execute("""SELECT referrer_username, referrer_first_name, COUNT(*) as cnt 
-                 FROM referrals 
-                 GROUP BY referrer_id 
-                 ORDER BY cnt DESC 
-                 LIMIT 1""")
-    top = c.fetchone()
-    top_referrer = f"{top[1]} (@{top[0]}) - {top[2]}" if top else None
+    conversion_rate = (active_users / total_users * 100) if total_users > 0 else 0
     
-    avg_referrals = total_referrals / total_referrers if total_referrers > 0 else 0
+    from datetime import timedelta
+    seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
+    c.execute("SELECT COUNT(*) FROM users WHERE first_seen >= ?", (seven_days_ago,))
+    new_users = c.fetchone()[0]
     
-    c.execute("""SELECT referrer_id, referrer_username, referrer_first_name, COUNT(*) as count
-                 FROM referrals
-                 GROUP BY referrer_id
-                 ORDER BY count DESC""")
+    c.execute("""SELECT user_id, username, first_name, last_name, first_seen, last_activity, total_orders
+                 FROM users
+                 ORDER BY last_activity DESC""")
     
-    referrers = []
+    users = []
     for row in c.fetchall():
-        referrers.append({
-            'referrer_id': row[0],
-            'username': row[1],
-            'first_name': row[2],
-            'count': row[3]
+        users.append({
+            'user_id': row[0],
+            'username': row[1] or 'N/A',
+            'first_name': row[2] or 'Inconnu',
+            'last_name': row[3] or '',
+            'first_seen': row[4],
+            'last_activity': row[5],
+            'total_orders': row[6]
         })
     
     conn.close()
     
     return jsonify({
         'stats': {
-            'total_referrers': total_referrers,
-            'total_referrals': total_referrals,
-            'top_referrer': top_referrer,
-            'avg_referrals': avg_referrals
+            'total_users': total_users,
+            'active_users': active_users,
+            'conversion_rate': round(conversion_rate, 1),
+            'new_users': new_users
         },
-        'referrers': referrers
+        'users': users
     })
 
-@app.route('/api/referrals/<int:referrer_id>')
+@app.route('/api/users/<int:user_id>')
 @login_required
-def api_referrer_details(referrer_id):
+def api_user_details(user_id):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    c.execute("""SELECT referrer_first_name, referrer_username FROM referrals 
-                 WHERE referrer_id=? LIMIT 1""", (referrer_id,))
-    referrer = c.fetchone()
+    c.execute("""SELECT id, service, plan, price, timestamp, status
+                 FROM orders
+                 WHERE user_id=?
+                 ORDER BY timestamp DESC""", (user_id,))
     
-    c.execute("""SELECT referred_id, referred_username, referred_first_name, timestamp
-                 FROM referrals
-                 WHERE referrer_id=?
-                 ORDER BY timestamp DESC""", (referrer_id,))
-    
-    referrals = []
+    orders = []
     for row in c.fetchall():
-        referrals.append({
-            'referred_id': row[0],
-            'referred_username': row[1],
-            'referred_first_name': row[2],
-            'timestamp': row[3]
+        orders.append({
+            'id': row[0],
+            'service': row[1],
+            'plan': row[2],
+            'price': row[3],
+            'timestamp': row[4],
+            'status': row[5]
         })
     
     conn.close()
     
-    return jsonify({
-        'referrer_name': f"{referrer[0]} (@{referrer[1]})" if referrer else "Inconnu",
-        'referrals': referrals
-    })
+    return jsonify({'orders': orders})
 
 @app.route('/api/dashboard')
 @login_required
@@ -1244,10 +1255,12 @@ def api_dashboard():
     inprogress = c.fetchone()[0]
     c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
     completed = c.fetchone()[0]
-    c.execute("SELECT COALESCE(SUM(price), 0) FROM orders WHERE status='terminee'")
-    revenue = c.fetchone()[0]
-    c.execute("SELECT COALESCE(SUM(price - cost), 0) FROM orders WHERE status='terminee'")
-    profit = c.fetchone()[0]
+    
+    # Récupérer les stats cumulatives
+    c.execute("SELECT total_revenue, total_profit FROM cumulative_stats WHERE id=1")
+    cumul = c.fetchone()
+    revenue = cumul[0] if cumul else 0
+    profit = cumul[1] if cumul else 0
     
     conn.close()
     
@@ -1283,6 +1296,16 @@ def take_order(order_id):
 def complete_order(order_id):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
+    
+    # Récupérer prix et coût
+    c.execute("SELECT price, cost FROM orders WHERE id=?", (order_id,))
+    row = c.fetchone()
+    if row:
+        price, cost = row
+        # Mettre à jour stats cumulatives
+        c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
+                  (price, price - cost, datetime.now().isoformat()))
+    
     c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
     conn.commit()
     conn.close()
@@ -1374,6 +1397,14 @@ def api_simulate():
             days_ago = random.randint(0, 30)
             timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
 
+            # Enregistrer l'utilisateur
+            c.execute("""INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, first_seen, last_activity, total_orders)
+                         VALUES (?, ?, ?, ?, ?, ?, 0)""", 
+                      (user_id, username, first_name, last_name, timestamp, timestamp))
+            
+            c.execute("UPDATE users SET last_activity = ?, total_orders = total_orders + 1 WHERE user_id = ?",
+                      (timestamp, user_id))
+
             if service['key'] == 'deezer':
                 c.execute("""INSERT INTO orders 
                              (user_id, username, service, plan, price, cost, timestamp, status,
@@ -1392,56 +1423,11 @@ def api_simulate():
                            first_name, last_name, email, payment_method))
 
             order_id = c.lastrowid
-
-            admin_message = (
-                f"🔔 *NOUVELLE COMMANDE #{order_id}* (simulation)\n\n"
-                f"👤 Client: @{username}\n"
-                f"📦 Service: {service['name']}\n"
-                f"📋 Plan: {service['plan_label']}\n"
-                f"💰 Prix: {service['price']}€\n"
-                f"💵 Coût: {service['cost']}€\n"
-                f"📈 Bénéf: {service['price'] - service['cost']}€\n\n"
-                f"*Informations client:*\n"
-                f"👤 {first_name} {last_name}\n"
-                f"📧 {email}\n"
-                f"💳 Paiement: {payment_method}\n\n"
-                f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-            )
-
-            reply_markup = {
-                "inline_keyboard": [
-                    [
-                        {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
-                        {"text": "✅ Terminer", "callback_data": f"admin_complete_{order_id}"},
-                        {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
-                    ]
-                ]
-            }
-
-            if BOT_TOKEN:
-                for admin_id in ADMIN_IDS:
-                    try:
-                        resp = requests.post(
-                            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                            json={
-                                "chat_id": admin_id,
-                                "text": admin_message,
-                                "parse_mode": "Markdown",
-                                "reply_markup": reply_markup
-                            },
-                            timeout=10
-                        )
-                        if resp.ok:
-                            j = resp.json()
-                            if j.get("ok") and j.get("result"):
-                                msg_id = j["result"]["message_id"]
-                                try:
-                                    c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                                                 VALUES (?, ?, ?)""", (order_id, admin_id, msg_id))
-                                except Exception as e:
-                                    print("order_messages insert error:", e)
-                    except Exception as e:
-                        print(f"[simulate notify admin {admin_id}] Erreur: {e}")
+            
+            # Si terminée, mettre à jour stats cumulatives
+            if status == 'terminee':
+                c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
+                          (service['price'], service['price'] - service['cost'], datetime.now().isoformat()))
 
             created_orders.append({
                 'id': order_id,
@@ -1465,110 +1451,39 @@ def api_simulate():
 
 # ----------------------- TELEGRAM BOT HANDLERS -----------------------
 
-# ⭐ HANDLER /parrainage
-async def parrainage_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Génère le lien de parrainage pour l'utilisateur"""
-    user_id = update.message.from_user.id
-    username = update.message.from_user.username or f"User_{user_id}"
-    first_name = update.message.from_user.first_name or "Utilisateur"
-    
-    referral_code = f"REF_{user_id}"
-    # Forcer le lien vers t.me/B4Udeal (avec param start pour conserver le code)
-    referral_link = f"https://t.me/B4Udeal?start={referral_code}"
-    
+# Helper pour enregistrer/update user
+def update_user_activity(user_id, username, first_name, last_name):
+    """Enregistre ou met à jour l'activité d'un utilisateur"""
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user_id,))
-    count = c.fetchone()[0]
+    now = datetime.now().isoformat()
+    
+    c.execute("SELECT user_id FROM users WHERE user_id=?", (user_id,))
+    if c.fetchone():
+        c.execute("UPDATE users SET last_activity=?, username=?, first_name=?, last_name=? WHERE user_id=?",
+                  (now, username, first_name, last_name, user_id))
+    else:
+        c.execute("""INSERT INTO users (user_id, username, first_name, last_name, first_seen, last_activity, total_orders)
+                     VALUES (?, ?, ?, ?, ?, ?, 0)""",
+                  (user_id, username, first_name, last_name, now, now))
+    
+    conn.commit()
     conn.close()
-    
-    message = (
-        f"🎁 *TON LIEN DE PARRAINAGE*\n\n"
-        f"👤 {first_name} (@{username})\n\n"
-        f"🔗 Ton lien unique :\n`{referral_link}`\n\n"
-        f"📊 Statistiques :\n"
-        f"✅ {count} personne(s) parrainée(s)\n\n"
-        f"💡 *Comment ça marche ?*\n"
-        f"1. Partage ce lien à tes amis\n"
-        f"2. 5 invitations: Tech ps5 ou tech uber\n"
-        f"3. Contacte @Noalloo ou @Ssko47 pour tes récompenses !\n\n"
-    )
-    
-    await update.message.reply_text(message, parse_mode='Markdown')
 
-# ⭐ HANDLER /start modifié pour détecter les parrainages
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
     first_name = update.message.from_user.first_name or "Utilisateur"
+    last_name = update.message.from_user.last_name or ""
     
-    # Détecter code de parrainage
-    referral_code = None
-    if context.args and len(context.args) > 0:
-        potential_code = context.args[0]
-        if potential_code.startswith("REF_"):
-            referral_code = potential_code
-    
-    # Si code de parrainage
-    if referral_code:
-        try:
-            referrer_id = int(referral_code.replace("REF_", ""))
-            
-            if referrer_id != user_id:
-                conn = sqlite3.connect('orders.db', check_same_thread=False)
-                c = conn.cursor()
-                
-                c.execute("SELECT id FROM referrals WHERE referred_id=?", (user_id,))
-                existing = c.fetchone()
-                
-                if not existing:
-                    # Récupérer infos du parrain
-                    try:
-                        referrer_info = await context.bot.get_chat(referrer_id)
-                        referrer_username = referrer_info.username or f"User_{referrer_id}"
-                        referrer_first_name = referrer_info.first_name or "Inconnu"
-                    except:
-                        referrer_username = f"User_{referrer_id}"
-                        referrer_first_name = "Inconnu"
-                    
-                    # Enregistrer le parrainage
-                    c.execute("""INSERT INTO referrals 
-                                 (referrer_id, referrer_username, referrer_first_name,
-                                  referred_id, referred_username, referred_first_name,
-                                  referral_code, timestamp)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                              (referrer_id, referrer_username, referrer_first_name,
-                               user_id, username, first_name,
-                               referral_code, datetime.now().isoformat()))
-                    conn.commit()
-                    
-                    # Notifier le parrain
-                    try:
-                        await context.bot.send_message(
-                            chat_id=referrer_id,
-                            text=f"🎉 *NOUVEAU FILLEUL !*\n\n👤 {first_name} (@{username}) vient de s'inscrire via ton lien de parrainage !\n\n✅ Continue de partager pour gagner plus ! 🚀",
-                            parse_mode='Markdown'
-                        )
-                    except:
-                        pass
-                    
-                    await update.message.reply_text(
-                        f"🎁 *Bienvenue {first_name} !*\n\n"
-                        f"Tu as été parrainé par @{referrer_username} !\n\n"
-                        f"Choisis un service ci-dessous pour commencer 👇",
-                        parse_mode='Markdown'
-                    )
-                
-                conn.close()
-        except:
-            pass
+    # Enregistrer l'activité
+    update_user_activity(user_id, username, first_name, last_name)
     
     # Menu principal
     keyboard = [
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
-        [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-        [InlineKeyboardButton("🎁 Mon lien de parrainage", callback_data="show_referral")]
+        [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1579,7 +1494,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Comptes streaming\n"
         "• Abonnements musique\n"
         "• Services IA\n\n"
-        "💡 Parraine tes amis et gagne des récompenses !\n\n"
         "Choisis une catégorie pour commencer :"
     )
     
@@ -1590,35 +1504,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     user_id = query.from_user.id
+    username = query.from_user.username or f"User_{user_id}"
+    first_name = query.from_user.first_name or "Utilisateur"
+    last_name = query.from_user.last_name or ""
     
-    # ⭐ Afficher le lien de parrainage
-    if data == "show_referral":
-        username = query.from_user.username or f"User_{user_id}"
-        first_name = query.from_user.first_name or "Utilisateur"
-        
-        referral_code = f"REF_{user_id}"
-        # Forcer le lien vers t.me/B4Udeal (avec param start pour conserver le code)
-        referral_link = f"https://t.me/B4Udeal?start={referral_code}"
-        
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id=?", (user_id,))
-        count = c.fetchone()[0]
-        conn.close()
-        
-        message = (
-            f"🎁 *TON LIEN DE PARRAINAGE*\n\n"
-            f"👤 {first_name} (@{username})\n\n"
-            f"🔗 Ton lien :\n`{referral_link}`\n\n"
-            f"📊 {count} filleul(s)\n\n"
-            f"Partage-le pour gagner ! 🚀"
-        )
-        
-        keyboard = [[InlineKeyboardButton("⬅️ Retour", callback_data="back_to_menu")]]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
-        return
+    # Update activité
+    update_user_activity(user_id, username, first_name, last_name)
     
     # Catégories
     if data.startswith("cat_"):
@@ -1718,8 +1609,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
-            [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
-            [InlineKeyboardButton("🎁 Mon lien de parrainage", callback_data="show_referral")]
+            [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
@@ -1729,7 +1619,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Actions admin
+    # Actions admin depuis Telegram
     if data.startswith("admin_"):
         parts = data.split("_")
         if len(parts) < 3:
@@ -1752,15 +1642,16 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT service, plan, price FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT service, plan, price, cost FROM orders WHERE id=?", (order_id,))
         row = c.fetchone()
         if not row:
             conn.close()
             await query.answer("Commande introuvable", show_alert=True)
             return
-        service_name, plan_label, price = row
+        service_name, plan_label, price, cost = row
 
         timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
         if action == "take":
             c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
                       (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
@@ -1772,9 +1663,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 {price}€\n\n"
                 f"🕒 {timestamp}"
             )
-            answer_text = "Commande prise en charge ✅"
+            answer_text = "✅ Commande prise en charge"
 
         elif action == "complete":
+            # Mettre à jour stats cumulatives
+            c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
+                      (price, price - cost, datetime.now().isoformat()))
+            
             c.execute("UPDATE orders SET status='terminee', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
                       (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
             conn.commit()
@@ -1785,7 +1680,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 {price}€\n\n"
                 f"🕒 {timestamp}"
             )
-            answer_text = "Commande terminée ✅"
+            answer_text = "✅ Commande terminée"
 
         elif action == "cancel":
             c.execute("UPDATE orders SET status='annulee', cancelled_by=?, cancelled_at=? WHERE id=?",
@@ -1797,7 +1692,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📦 {service_name} — {plan_label}\n"
                 f"🕒 {timestamp}"
             )
-            answer_text = "Commande annulée ✅"
+            answer_text = "✅ Commande annulée"
 
         else:
             conn.close()
@@ -1834,6 +1729,9 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     full_name_tg = f"{first_name_tg} {last_name_tg}".strip() or f"User_{user_id}"
     text = update.message.text
     
+    # Update activité
+    update_user_activity(user_id, username, first_name_tg, last_name_tg)
+    
     if user_id not in user_states:
         await update.message.reply_text(
             "❌ Aucune commande en cours.\n\nUtilise /start pour commencer."
@@ -1860,6 +1758,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                    lines[1].strip(), lines[0].strip(), lines[2].strip()))
         
         order_id = c.lastrowid
+        
+        # Update total_orders de l'utilisateur
+        c.execute("UPDATE users SET total_orders = total_orders + 1, last_activity = ? WHERE user_id = ?",
+                  (datetime.now().isoformat(), user_id))
+        
         conn.commit()
 
         for admin_id in ADMIN_IDS:
@@ -1955,6 +1858,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                    first_name, last_name, email, payment_method))
         
         order_id = c.lastrowid
+        
+        # Update total_orders de l'utilisateur
+        c.execute("UPDATE users SET total_orders = total_orders + 1, last_activity = ? WHERE user_id = ?",
+                  (datetime.now().isoformat(), user_id))
+        
         conn.commit()
 
         admin_message = (
@@ -2057,7 +1965,6 @@ def run_bot():
 
         app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
         app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(CommandHandler("parrainage", parrainage_command))  # ⭐ NOUVEAU
         app_bot.add_handler(CallbackQueryHandler(button_callback))
         app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
