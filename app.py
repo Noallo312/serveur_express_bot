@@ -117,7 +117,7 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'music',
         'plans': {
-            'premium': {'label': 'Deezer Premium', 'price': 10.00, 'cost': 3.00}
+            'premium': {'label': 'Deezer Premium', 'price': 10.00, 'cost': 5.00}
         }
     }
 }
@@ -1662,15 +1662,22 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT service, plan, price, cost FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
         row = c.fetchone()
         if not row:
             conn.close()
             await query.answer("Commande introuvable", show_alert=True)
             return
-        service_name, plan_label, price, cost = row
+        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
 
         timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+        
+        # Construire les infos client
+        client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
+        client_info += f"👤 {order_first_name} {order_last_name}\n"
+        client_info += f"📧 {order_email}\n"
+        if order_payment:
+            client_info += f"💳 {order_payment}\n"
         
         if action == "take":
             c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
@@ -1678,9 +1685,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             new_text = (
                 f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n"
-                f"Pris en charge par @{admin_username}\n"
-                f"📦 {service_name} — {plan_label}\n"
-                f"💰 {price}€\n\n"
+                f"✅ Pris en charge par @{admin_username}\n\n"
+                f"📦 *Service:* {service_name}\n"
+                f"📋 *Plan:* {plan_label}\n"
+                f"💰 *Prix:* {price}€\n"
+                f"💵 *Coût:* {cost}€\n"
+                f"📈 *Bénéfice:* {price - cost}€\n\n"
+                f"*Informations client:*\n"
+                f"{client_info}\n"
                 f"🕒 {timestamp}"
             )
             answer_text = "✅ Commande prise en charge"
@@ -1695,9 +1707,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             new_text = (
                 f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\n"
-                f"Traitée par @{admin_username}\n"
-                f"📦 {service_name} — {plan_label}\n"
-                f"💰 {price}€\n\n"
+                f"🎉 Traitée par @{admin_username}\n\n"
+                f"📦 *Service:* {service_name}\n"
+                f"📋 *Plan:* {plan_label}\n"
+                f"💰 *Prix:* {price}€\n"
+                f"💵 *Coût:* {cost}€\n"
+                f"📈 *Bénéfice:* {price - cost}€\n\n"
+                f"*Informations client:*\n"
+                f"{client_info}\n"
                 f"🕒 {timestamp}"
             )
             answer_text = "✅ Commande terminée"
@@ -1708,8 +1725,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             new_text = (
                 f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\n"
-                f"Annulée par @{admin_username}\n"
-                f"📦 {service_name} — {plan_label}\n"
+                f"🚫 Annulée par @{admin_username}\n\n"
+                f"📦 *Service:* {service_name}\n"
+                f"📋 *Plan:* {plan_label}\n"
+                f"💰 *Prix:* {price}€\n\n"
+                f"*Informations client:*\n"
+                f"{client_info}\n"
                 f"🕒 {timestamp}"
             )
             answer_text = "✅ Commande annulée"
@@ -1720,11 +1741,14 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             new_text = (
                 f"🔄 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-                f"Remise en attente par @{admin_username}\n"
-                f"📦 {service_name} — {plan_label}\n"
-                f"💰 {price}€\n"
-                f"💵 Coût: {cost}€\n"
-                f"📈 Bénéf: {price - cost}€\n\n"
+                f"♻️ Remise en attente par @{admin_username}\n\n"
+                f"📦 *Service:* {service_name}\n"
+                f"📋 *Plan:* {plan_label}\n"
+                f"💰 *Prix:* {price}€\n"
+                f"💵 *Coût:* {cost}€\n"
+                f"📈 *Bénéfice:* {price - cost}€\n\n"
+                f"*Informations client:*\n"
+                f"{client_info}\n"
                 f"🕒 {timestamp}"
             )
             answer_text = "✅ Commande remise en ligne"
