@@ -1,8 +1,10 @@
 # Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives
 # - Système de parrainage RETIRÉ
 # - Dashboard utilisateurs avancé avec recherche
-# - Gestion complète des commandes depuis Telegram (prendre/annuler/remettre en ligne)
+# - Gestion complète des commandes depuis Telegram (prendre/annuler/remettre/terminer)
 # - Stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
+# - Image au lancement du bot
+# - Prix Deezer à 10€
 
 import os
 import sqlite3
@@ -115,7 +117,7 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'music',
         'plans': {
-            'premium': {'label': 'Deezer Premium', 'price': 4.00, 'cost': 3.00}
+            'premium': {'label': 'Deezer Premium', 'price': 10.00, 'cost': 3.00}
         }
     }
 }
@@ -1497,7 +1499,20 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Choisis une catégorie pour commencer :"
     )
     
-    await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
+    # Envoyer l'image avec le message
+    try:
+        # URL de l'image - remplacez par votre propre image
+        image_url = "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800"
+        await update.message.reply_photo(
+            photo=image_url,
+            caption=welcome_text,
+            parse_mode='Markdown',
+            reply_markup=reply_markup
+        )
+    except Exception as e:
+        # Si l'image ne charge pas, envoyer juste le texte
+        print(f"Erreur chargement image: {e}")
+        await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -1516,6 +1531,11 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         category = data.replace("cat_", "")
         keyboard = []
         
+    # Catégories
+    if data.startswith("cat_"):
+        category = data.replace("cat_", "")
+        keyboard = []
+        
         for service_key, service_data in SERVICES_CONFIG.items():
             if service_data['active'] and service_data.get('visible', True) and service_data['category'] == category:
                 keyboard.append([InlineKeyboardButton(service_data['name'], callback_data=f"service_{service_key}")])
@@ -1529,8 +1549,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'ai': '🤖 Intelligence Artificielle'
         }
         
-        await query.edit_message_text(
-            f"*{category_labels.get(category, category)}*\n\nChoisis ton service :",
+        await query.edit_message_caption(
+            caption=f"*{category_labels.get(category, category)}*\n\nChoisis ton service :",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
@@ -1551,8 +1571,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard.append([InlineKeyboardButton("⬅️ Retour", callback_data=f"cat_{service['category']}")])
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        await query.edit_message_text(
-            f"*{service['name']}*\n\nChoisis ton abonnement :",
+        await query.edit_message_caption(
+            caption=f"*{service['name']}*\n\nChoisis ton abonnement :",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
@@ -1578,7 +1598,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Formulaire Deezer
         if service_key == 'deezer':
-            await query.edit_message_text(
+            await query.message.reply_text(
                 f"✅ *Commande confirmée*\n\nService: {service['name']}\nPlan: {plan['label']}\nPrix: {plan['price']}€\n\n📝 Envoie ton nom, prénom et mail (chacun sur une ligne)",
                 parse_mode='Markdown'
             )
@@ -1601,7 +1621,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "jean.dupont@email.com\n"
                 "PayPal"
             )
-            await query.edit_message_text(form_text, parse_mode='Markdown')
+            await query.message.reply_text(form_text, parse_mode='Markdown')
             return
     
     # Retour au menu principal
@@ -1612,8 +1632,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text(
-            "🎯 *B4U Deals*\n\nChoisis une catégorie :",
+        await query.edit_message_caption(
+            caption="🎯 *B4U Deals*\n\nChoisis une catégorie :",
             parse_mode='Markdown',
             reply_markup=reply_markup
         )
@@ -1694,6 +1714,21 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             answer_text = "✅ Commande annulée"
 
+        elif action == "restore":
+            c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL, cancelled_by=NULL, cancelled_at=NULL WHERE id=?",
+                      (order_id,))
+            conn.commit()
+            new_text = (
+                f"🔄 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
+                f"Remise en attente par @{admin_username}\n"
+                f"📦 {service_name} — {plan_label}\n"
+                f"💰 {price}€\n"
+                f"💵 Coût: {cost}€\n"
+                f"📈 Bénéf: {price - cost}€\n\n"
+                f"🕒 {timestamp}"
+            )
+            answer_text = "✅ Commande remise en ligne"
+
         else:
             conn.close()
             await query.answer("Action inconnue", show_alert=True)
@@ -1708,7 +1743,13 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         chat_id=admin_chat_id,
                         message_id=message_id,
                         text=new_text,
-                        parse_mode='Markdown'
+                        parse_mode='Markdown',
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                            InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
+                            InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
+                        ]])
                     )
                 except Exception as e:
                     print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
@@ -1785,7 +1826,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 keyboard = InlineKeyboardMarkup([[
                     InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
                     InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
+                    InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
                 ]])
 
                 msg = await context.bot.send_message(
@@ -1882,7 +1924,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
             InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
+            InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
         ]])
         
         for admin_id in ADMIN_IDS:
