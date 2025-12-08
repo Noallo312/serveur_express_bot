@@ -1501,8 +1501,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # Envoyer l'image avec le message
     try:
-        # URL de l'image - remplacez par votre propre image
-        image_url = "https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?w=800"
+        # URL de l'image B4U Deals
+        image_url = "https://raw.githubusercontent.com/Noallo312/serveur_express_bot/refs/heads/main/514B1CC0-791F-47CA-825C-F82A4100C02E.png"
         await update.message.reply_photo(
             photo=image_url,
             caption=welcome_text,
