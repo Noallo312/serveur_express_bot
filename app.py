@@ -12,13 +12,12 @@ import sqlite3
 import requests
 import random
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, redirect, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from functools import wraps
 import threading
-import time
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 5174507979]
@@ -1177,8 +1176,7 @@ HTML_USERS = '''<!DOCTYPE html>
 </html>
 '''
 
-# ----------------------- FLASK ROUTES -----------------------
-
+# Routes Flask
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
@@ -1208,7 +1206,6 @@ def simulate():
 def users_page():
     return render_template_string(HTML_USERS)
 
-# API USERS
 @app.route('/api/users')
 @login_required
 def api_users():
@@ -1223,7 +1220,6 @@ def api_users():
     
     conversion_rate = (active_users / total_users * 100) if total_users > 0 else 0
     
-    from datetime import timedelta
     seven_days_ago = (datetime.now() - timedelta(days=7)).isoformat()
     c.execute("SELECT COUNT(*) FROM users WHERE first_seen >= ?", (seven_days_ago,))
     new_users = c.fetchone()[0]
@@ -1397,12 +1393,10 @@ def restore_order(order_id):
               (order_id,))
     conn.commit()
     
-    # Supprimer les anciennes notifications
     c.execute("DELETE FROM order_messages WHERE order_id=?", (order_id,))
     conn.commit()
     conn.close()
     
-    # Envoyer de nouvelles notifications à tous les admins
     try:
         resend_order_to_all_admins(order_id)
     except Exception as e:
@@ -1418,12 +1412,9 @@ def index():
 def health():
     return jsonify({'status': 'ok', 'bot': 'running'})
 
-# ----------------------- SIMULATE SALES -----------------------
 @app.route('/api/simulate', methods=['POST'])
 @login_required
 def api_simulate():
-    from datetime import timedelta
-
     try:
         data = request.get_json(force=True)
         if data is None:
@@ -1527,10 +1518,8 @@ def api_simulate():
 
     return jsonify({'success': True, 'created': len(created_orders), 'orders': created_orders})
 
-# ----------------------- TELEGRAM BOT HANDLERS -----------------------
-
+# Helper functions
 def update_user_activity(user_id, username, first_name, last_name):
-    """Enregistre ou met à jour l'activité d'un utilisateur"""
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     now = datetime.now().isoformat()
@@ -1543,10 +1532,13 @@ def update_user_activity(user_id, username, first_name, last_name):
         c.execute("""INSERT INTO users (user_id, username, first_name, last_name, first_seen, last_activity, total_orders)
                      VALUES (?, ?, ?, ?, ?, ?, 0)""",
                   (user_id, username, first_name, last_name, now, now))
-    
+# Full app.py - Dashboard B4U Deals - PARTIE 2/2
+# Suite des handlers Telegram et fonctions helper
+
     conn.commit()
     conn.close()
 
+# Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
@@ -1555,7 +1547,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     update_user_activity(user_id, username, first_name, last_name)
     
-    # Menu principal avec Basic Fit
     keyboard = [
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
@@ -1731,161 +1722,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn = sqlite3.connect('orders.db', check_same_thread=False)
         c = conn.cursor()
-        c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
-        row = c.fetchone()
-        if not row:
-            conn.close()
-            return
-        
-        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
-        
-        client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
-        client_info += f"👤 {order_first_name} {order_last_name}\n"
-        client_info += f"📧 {order_email}\n"
-        if order_payment:
-            client_info += f"💳 {order_payment}\n"
-        
-        admin_text = (
-            f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-            f"📦 *Service:* {service_name}\n"
-            f"📋 *Plan:* {plan_label}\n"
-            f"💰 *Prix:* {price}€\n"
-            f"💵 *Coût:* {cost}€\n"
-            f"📈 *Bénéfice:* {price - cost}€\n\n"
-            f"*Informations client:*\n"
-            f"{client_info}\n"
-            f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-        )
-        
-        keyboard_data = {
-            "inline_keyboard": [[
-                {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
-                {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
-            ]]
-        }
-        
-        for admin_id in ADMIN_IDS:
-            try:
-                response = requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": admin_id,
-                        "text": admin_text,
-                        "parse_mode": "Markdown",
-                        "reply_markup": keyboard_data
-                    },
-                    timeout=10
-                )
-                
-                if response.ok:
-                    result = response.json()
-                    if result.get('ok'):
-                        message_id = result['result']['message_id']
-                        try:
-                            conn2 = sqlite3.connect('orders.db', check_same_thread=False)
-                            c2 = conn2.cursor()
-                            c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                                          VALUES (?, ?, ?)""", (order_id, admin_id, message_id))
-                            conn2.commit()
-                            conn2.close()
-                        except Exception as e:
-                            print(f"[order_messages insert] Erreur: {e}")
-            except Exception as e:
-                print(f"Erreur envoi admin {admin_id}: {e}")
-    except Exception as e:
-        print("Erreur resend_order_to_all_admins:", e)
-    finally:
-        conn.close()
-
-async def resend_order_to_all_admins_async(context, order_id: int, service_name: str, plan_label: str, price: float, cost: float, order_username: str, order_user_id: int, order_first_name: str, order_last_name: str, order_email: str, order_payment: str):
-    """Renvoie une commande à tous les admins (async version)"""
-    
-    client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
-    client_info += f"👤 {order_first_name} {order_last_name}\n"
-    client_info += f"📧 {order_email}\n"
-    if order_payment:
-        client_info += f"💳 {order_payment}\n"
-    
-    admin_text = (
-        f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-        f"📦 *Service:* {service_name}\n"
-        f"📋 *Plan:* {plan_label}\n"
-        f"💰 *Prix:* {price}€\n"
-        f"💵 *Coût:* {cost}€\n"
-        f"📈 *Bénéfice:* {price - cost}€\n\n"
-        f"*Informations client:*\n"
-        f"{client_info}\n"
-        f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-    )
-    
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-        InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
-    ]])
-    
-    for admin_id in ADMIN_IDS:
-        try:
-            msg = await context.bot.send_message(
-                chat_id=admin_id,
-                text=admin_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-            
-            try:
-                conn = sqlite3.connect('orders.db', check_same_thread=False)
-                c = conn.cursor()
-                c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                              VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[order_messages insert] Erreur: {e}")
-        except Exception as e:
-            print(f"Erreur envoi admin {admin_id}: {e}")
-
-# ----------------------- Bot runner -----------------------
-def run_bot():
-    """Démarre le bot Telegram dans un thread séparé avec event loop dédié"""
-    if not BOT_TOKEN:
-        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
-        return
-    try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(CallbackQueryHandler(button_callback))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-
-        print("🤖 Démarrage du bot Telegram (polling)...")
-        loop.run_until_complete(
-            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
-        )
-
-    except Exception as e:
-        print(f"❌ Erreur critique du bot: {e}")
-        traceback.print_exc()
-    finally:
-        try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except Exception:
-            pass
-        try:
-            loop.close()
-        except Exception:
-            pass
-
-if __name__ == '__main__':
-    # Lancer le bot dans un thread séparé
-    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
-    bot_thread.start()
-
-    # Lancer Flask
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port), first_name, last_name, email, payment_method, admin_id FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method, admin_id FROM orders WHERE id=?", (order_id,))
         row = c.fetchone()
         if not row:
             conn.close()
@@ -1894,7 +1731,7 @@ if __name__ == '__main__':
         
         service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment, current_admin_id = row
 
-        # SYSTÈME DE VERROUILLAGE : vérifier si la commande est prise par un autre admin
+        # Verrouillage
         if current_admin_id and current_admin_id != admin_user_id and action in ['take', 'complete', 'cancel']:
             conn.close()
             await query.answer("❌ Cette commande est déjà prise par un autre admin", show_alert=True)
@@ -1926,7 +1763,6 @@ if __name__ == '__main__':
             )
             answer_text = "✅ Commande prise en charge"
             
-            # Supprimer les notifications des autres admins
             delete_other_admin_notifications(order_id, admin_user_id)
 
         elif action == "complete":
@@ -1970,12 +1806,10 @@ if __name__ == '__main__':
                       (order_id,))
             conn.commit()
             
-            # Supprimer les anciennes notifications
             c.execute("DELETE FROM order_messages WHERE order_id=?", (order_id,))
             conn.commit()
             conn.close()
             
-            # Renvoyer à tous les admins
             await resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, order_username, order_user_id, order_first_name, order_last_name, order_email, order_payment)
             
             await query.answer("✅ Commande remise en ligne")
@@ -1986,9 +1820,7 @@ if __name__ == '__main__':
             await query.answer("Action inconnue", show_alert=True)
             return
 
-        # Mettre à jour le message de l'admin qui a fait l'action
         try:
-            # Boutons dynamiques selon le nouveau statut
             c.execute("SELECT status FROM orders WHERE id=?", (order_id,))
             current_status = c.fetchone()[0]
             
@@ -2065,6 +1897,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                   (datetime.now().isoformat(), user_id))
         
         conn.commit()
+        conn.close()
 
         # Envoyer aux admins
         for admin_id in ADMIN_IDS:
@@ -2108,8 +1941,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
             except Exception as e:
                 print(f"Erreur envoi admin: {e}")
-        
-        conn.close()
         
         await update.message.reply_text(f"✅ *Commande #{order_id} enregistrée !*\n\nMerci ! 🙏", parse_mode='Markdown')
         del user_states[user_id]
@@ -2164,6 +1995,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                   (datetime.now().isoformat(), user_id))
         
         conn.commit()
+        conn.close()
 
         admin_message = (
             f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
@@ -2204,8 +2036,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             except Exception as e:
                 print(f"[ERREUR] Notification admin {admin_id}: {e}")
         
-        conn.close()
-        
         confirmation_message = (
             f"✅ *Commande #{order_id} enregistrée !*\n\n"
             f"📦 {state['plan_label']}\n"
@@ -2221,9 +2051,8 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         del user_states[user_id]
         return
 
-# ----------------------- Helper functions -----------------------
+# Helper functions
 def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
-    """Supprime les notifications des autres admins (HTTP API sync)"""
     if not BOT_TOKEN:
         return
 
@@ -2245,7 +2074,6 @@ def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
             except Exception as e:
                 print(f"[delete_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
         
-        # Supprimer de la DB
         c.execute("DELETE FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
         conn.commit()
     except Exception as e:
@@ -2254,7 +2082,6 @@ def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
         conn.close()
 
 def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
-    """Édite la notification d'un admin spécifique (HTTP API sync)"""
     if not BOT_TOKEN:
         return
 
@@ -2284,7 +2111,6 @@ def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
         conn.close()
 
 def edit_all_admin_notifications(order_id: int, new_text: str):
-    """Édite toutes les notifications pour une commande (HTTP API sync)"""
     if not BOT_TOKEN:
         return
 
@@ -2313,11 +2139,159 @@ def edit_all_admin_notifications(order_id: int, new_text: str):
         conn.close()
 
 def resend_order_to_all_admins(order_id: int):
-    """Renvoie une commande à tous les admins (HTTP API sync)"""
     if not BOT_TOKEN:
         return
 
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     try:
-        c.execute("SELECT service, plan, price, cost, user_id, username
+        c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
+        row = c.fetchone()
+        if not row:
+            return
+        
+        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
+        
+        client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
+        client_info += f"👤 {order_first_name} {order_last_name}\n"
+        client_info += f"📧 {order_email}\n"
+        if order_payment:
+            client_info += f"💳 {order_payment}\n"
+        
+        admin_text = (
+            f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
+            f"📦 *Service:* {service_name}\n"
+            f"📋 *Plan:* {plan_label}\n"
+            f"💰 *Prix:* {price}€\n"
+            f"💵 *Coût:* {cost}€\n"
+            f"📈 *Bénéfice:* {price - cost}€\n\n"
+            f"*Informations client:*\n"
+            f"{client_info}\n"
+            f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard_data = {
+            "inline_keyboard": [[
+                {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
+                {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
+            ]]
+        }
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": admin_id,
+                        "text": admin_text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": keyboard_data
+                    },
+                    timeout=10
+                )
+                
+                if response.ok:
+                    result = response.json()
+                    if result.get('ok'):
+                        message_id = result['result']['message_id']
+                        try:
+                            conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                            c2 = conn2.cursor()
+                            c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                          VALUES (?, ?, ?)""", (order_id, admin_id, message_id))
+                            conn2.commit()
+                            conn2.close()
+                        except Exception as e:
+                            print(f"[order_messages insert] Erreur: {e}")
+            except Exception as e:
+                print(f"Erreur envoi admin {admin_id}: {e}")
+    except Exception as e:
+        print("Erreur resend_order_to_all_admins:", e)
+    finally:
+        conn.close()
+
+async def resend_order_to_all_admins_async(context, order_id: int, service_name: str, plan_label: str, price: float, cost: float, order_username: str, order_user_id: int, order_first_name: str, order_last_name: str, order_email: str, order_payment: str):
+    
+    client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
+    client_info += f"👤 {order_first_name} {order_last_name}\n"
+    client_info += f"📧 {order_email}\n"
+    if order_payment:
+        client_info += f"💳 {order_payment}\n"
+    
+    admin_text = (
+        f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
+        f"📦 *Service:* {service_name}\n"
+        f"📋 *Plan:* {plan_label}\n"
+        f"💰 *Prix:* {price}€\n"
+        f"💵 *Coût:* {cost}€\n"
+        f"📈 *Bénéfice:* {price - cost}€\n\n"
+        f"*Informations client:*\n"
+        f"{client_info}\n"
+        f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+        InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+    ]])
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            msg = await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+            
+            try:
+                conn = sqlite3.connect('orders.db', check_same_thread=False)
+                c = conn.cursor()
+                c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                              VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[order_messages insert] Erreur: {e}")
+        except Exception as e:
+            print(f"Erreur envoi admin {admin_id}: {e}")
+
+# Bot runner
+def run_bot():
+    if not BOT_TOKEN:
+        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
+        return
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+        app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CallbackQueryHandler(button_callback))
+        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+        print("🤖 Démarrage du bot Telegram (polling)...")
+        loop.run_until_complete(
+            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
+        )
+
+    except Exception as e:
+        print(f"❌ Erreur critique du bot: {e}")
+        traceback.print_exc()
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+if __name__ == '__main__':
+    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
+    bot_thread.start()
+
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port)
