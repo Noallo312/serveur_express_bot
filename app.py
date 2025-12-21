@@ -1,10 +1,11 @@
 # Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives
-# - Système de parrainage RETIRÉ
+# - Système de verrouillage des commandes (un admin prend = invisible pour les autres)
+# - Boutons interactifs dynamiques selon le statut
+# - Ajout du service Basic Fit (catégorie dédiée)
 # - Dashboard utilisateurs avancé avec recherche
 # - Gestion complète des commandes depuis Telegram (prendre/annuler/remettre/terminer)
 # - Stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
 # - Image au lancement du bot
-# - Prix Deezer à 10€
 
 import os
 import sqlite3
@@ -26,7 +27,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# SERVICES_CONFIG
+# SERVICES_CONFIG - Ajout Basic Fit
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -119,6 +120,15 @@ SERVICES_CONFIG = {
         'plans': {
             'premium': {'label': 'Deezer Premium', 'price': 10.00, 'cost': 5.00}
         }
+    },
+    'basicfit': {
+        'name': '🏋️ Basic Fit',
+        'active': True,
+        'visible': True,
+        'category': 'basic_fit',
+        'plans': {
+            'ultimate': {'label': 'Basic Fit Ultimate', 'price': 30.00, 'cost': 5.00}
+        }
     }
 }
 
@@ -163,7 +173,6 @@ def init_db():
                   admin_id INTEGER,
                   message_id INTEGER)''')
     
-    # Nouvelle table users pour tracking
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -173,14 +182,12 @@ def init_db():
                   last_activity TEXT,
                   total_orders INTEGER DEFAULT 0)''')
     
-    # Table pour stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
     c.execute('''CREATE TABLE IF NOT EXISTS cumulative_stats
                  (id INTEGER PRIMARY KEY CHECK (id = 1),
                   total_revenue REAL DEFAULT 0,
                   total_profit REAL DEFAULT 0,
                   last_updated TEXT)''')
     
-    # Initialiser les stats cumulatives si pas encore fait
     c.execute("SELECT COUNT(*) FROM cumulative_stats WHERE id=1")
     if c.fetchone()[0] == 0:
         c.execute("INSERT INTO cumulative_stats (id, total_revenue, total_profit, last_updated) VALUES (1, 0, 0, ?)",
@@ -370,6 +377,10 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
         .order-card:hover {
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
         }
+        .order-card.locked {
+            opacity: 0.6;
+            border-left-color: #ef4444;
+        }
         .order-header {
             display: flex;
             justify-content: space-between;
@@ -408,6 +419,14 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             background: #f8d7da;
             color: #842029;
         }
+        .locked-badge {
+            background: #ef4444;
+            color: white;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+        }
         .order-actions {
             display: flex;
             gap: 10px;
@@ -429,9 +448,15 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
         }
+        .action-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
         .btn-take { background: #3b82f6; color: white; }
         .btn-complete { background: #10b981; color: white; }
         .btn-cancel { background: #ef4444; color: white; }
+        .btn-restore { background: #f59e0b; color: white; }
         .refresh-btn {
             position: fixed;
             bottom: 30px;
@@ -564,31 +589,55 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
                 return;
             }
             
-            container.innerHTML = filteredOrders.map(order => `
-                <div class="order-card">
-                    <div class="order-header">
-                        <div>
-                            <strong style="font-size:18px;color:#667eea">#${order.id}</strong>
-                            <span class="status-badge status-${order.status}">${getStatusLabel(order.status)}</span>
-                        </div>
-                        <div style="font-weight:bold;font-size:18px;color:#10b981">${order.price}€</div>
-                    </div>
-                    <div class="order-info">
-                        <div><strong>Service:</strong> ${order.service}</div>
-                        <div><strong>Plan:</strong> ${order.plan}</div>
-                        <div><strong>Client:</strong> @${order.username}</div>
-                        <div><strong>Nom:</strong> ${order.first_name} ${order.last_name}</div>
-                        <div><strong>Email:</strong> ${order.email}</div>
-                        <div><strong>Paiement:</strong> ${order.payment_method || 'N/A'}</div>
-                        <div><strong>Coût:</strong> ${order.cost}€ | <strong>Bénéfice:</strong> ${(order.price - order.cost).toFixed(2)}€</div>
-                    </div>
-                    <div class="order-actions">
-                        <button class="action-btn btn-take" onclick="takeOrder(${order.id})">✋ Prendre en charge</button>
-                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ Marquer terminée</button>
+            container.innerHTML = filteredOrders.map(order => {
+                const isLocked = order.admin_id && order.status !== 'en_attente';
+                const lockedClass = isLocked ? 'locked' : '';
+                const lockedBadge = isLocked ? `<span class="locked-badge">🔒 Pris par @${order.admin_username || 'Admin'}</span>` : '';
+                
+                // Boutons dynamiques selon le statut
+                let buttons = '';
+                if (order.status === 'en_attente') {
+                    buttons = `
+                        <button class="action-btn btn-take" onclick="takeOrder(${order.id})">✋ Prendre</button>
                         <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌ Annuler</button>
+                    `;
+                } else if (order.status === 'en_cours') {
+                    buttons = `
+                        <button class="action-btn btn-complete" onclick="completeOrder(${order.id})">✅ Terminer</button>
+                        <button class="action-btn btn-cancel" onclick="cancelOrder(${order.id})">❌ Annuler</button>
+                        <button class="action-btn btn-restore" onclick="restoreOrder(${order.id})">🔄 Remettre</button>
+                    `;
+                } else if (order.status === 'terminee' || order.status === 'annulee') {
+                    buttons = `
+                        <button class="action-btn btn-restore" onclick="restoreOrder(${order.id})">🔄 Remettre en ligne</button>
+                    `;
+                }
+                
+                return `
+                    <div class="order-card ${lockedClass}">
+                        <div class="order-header">
+                            <div>
+                                <strong style="font-size:18px;color:#667eea">#${order.id}</strong>
+                                <span class="status-badge status-${order.status}">${getStatusLabel(order.status)}</span>
+                                ${lockedBadge}
+                            </div>
+                            <div style="font-weight:bold;font-size:18px;color:#10b981">${order.price}€</div>
+                        </div>
+                        <div class="order-info">
+                            <div><strong>Service:</strong> ${order.service}</div>
+                            <div><strong>Plan:</strong> ${order.plan}</div>
+                            <div><strong>Client:</strong> @${order.username}</div>
+                            <div><strong>Nom:</strong> ${order.first_name} ${order.last_name}</div>
+                            <div><strong>Email:</strong> ${order.email}</div>
+                            <div><strong>Paiement:</strong> ${order.payment_method || 'N/A'}</div>
+                            <div><strong>Coût:</strong> ${order.cost}€ | <strong>Bénéfice:</strong> ${(order.price - order.cost).toFixed(2)}€</div>
+                        </div>
+                        <div class="order-actions">
+                            ${buttons}
+                        </div>
                     </div>
-                </div>
-            `).join('');
+                `;
+            }).join('');
         }
 
         function getStatusLabel(status) {
@@ -618,6 +667,13 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
         async function cancelOrder(orderId) {
             if (confirm('Annuler cette commande ?')) {
                 await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
+                loadData();
+            }
+        }
+
+        async function restoreOrder(orderId) {
+            if (confirm('Remettre cette commande en ligne ?')) {
+                await fetch(`/api/order/${orderId}/restore`, { method: 'POST' });
                 loadData();
             }
         }
@@ -756,6 +812,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
                         <option value="spotify">🎧 Spotify Premium</option>
                         <option value="deezer">🎵 Deezer Premium</option>
                         <option value="chatgpt">🤖 ChatGPT+</option>
+                        <option value="basicfit">🏋️ Basic Fit</option>
                     </select>
                 </div>
 
@@ -822,7 +879,6 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </html>
 '''
 
-# NOUVELLE PAGE: Dashboard Utilisateurs
 HTML_USERS = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1232,7 +1288,7 @@ def api_dashboard():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    c.execute("SELECT id, username, service, plan, price, cost, first_name, last_name, email, payment_method, status FROM orders ORDER BY id DESC")
+    c.execute("SELECT id, username, service, plan, price, cost, first_name, last_name, email, payment_method, status, admin_id, admin_username FROM orders ORDER BY id DESC")
     orders = []
     for row in c.fetchall():
         orders.append({
@@ -1246,7 +1302,9 @@ def api_dashboard():
             'last_name': row[7],
             'email': row[8],
             'payment_method': row[9],
-            'status': row[10]
+            'status': row[10],
+            'admin_id': row[11],
+            'admin_username': row[12]
         })
     
     c.execute("SELECT COUNT(*) FROM orders")
@@ -1258,7 +1316,6 @@ def api_dashboard():
     c.execute("SELECT COUNT(*) FROM orders WHERE status='terminee'")
     completed = c.fetchone()[0]
     
-    # Récupérer les stats cumulatives
     c.execute("SELECT total_revenue, total_profit FROM cumulative_stats WHERE id=1")
     cumul = c.fetchone()
     revenue = cumul[0] if cumul else 0
@@ -1283,14 +1340,15 @@ def api_dashboard():
 def take_order(order_id):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
-    c.execute("UPDATE orders SET status='en_cours', admin_username=?, taken_at=? WHERE id=?", 
-              ('web_admin', datetime.now().isoformat(), order_id))
+    c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?", 
+              (999999, 'web_admin', datetime.now().isoformat(), order_id))
     conn.commit()
     conn.close()
     try:
-        edit_notifications_for_order(order_id, f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\nPris en charge via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        delete_other_admin_notifications(order_id, 999999)
+        edit_admin_notification(order_id, 999999, f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n✅ Pris en charge via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications:", e)
+        print("Erreur notifications:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/complete', methods=['POST'])
@@ -1299,12 +1357,10 @@ def complete_order(order_id):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     
-    # Récupérer prix et coût
     c.execute("SELECT price, cost FROM orders WHERE id=?", (order_id,))
     row = c.fetchone()
     if row:
         price, cost = row
-        # Mettre à jour stats cumulatives
         c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
                   (price, price - cost, datetime.now().isoformat()))
     
@@ -1312,9 +1368,9 @@ def complete_order(order_id):
     conn.commit()
     conn.close()
     try:
-        edit_notifications_for_order(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        edit_all_admin_notifications(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications:", e)
+        print("Erreur notifications:", e)
     return jsonify({'success': True})
 
 @app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
@@ -1327,9 +1383,31 @@ def cancel_order(order_id):
     conn.commit()
     conn.close()
     try:
-        edit_notifications_for_order(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        edit_all_admin_notifications(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
-        print("Erreur edit notifications:", e)
+        print("Erreur notifications:", e)
+    return jsonify({'success': True})
+
+@app.route('/api/order/<int:order_id>/restore', methods=['POST'])
+@login_required
+def restore_order(order_id):
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL, cancelled_by=NULL, cancelled_at=NULL WHERE id=?",
+              (order_id,))
+    conn.commit()
+    
+    # Supprimer les anciennes notifications
+    c.execute("DELETE FROM order_messages WHERE order_id=?", (order_id,))
+    conn.commit()
+    conn.close()
+    
+    # Envoyer de nouvelles notifications à tous les admins
+    try:
+        resend_order_to_all_admins(order_id)
+    except Exception as e:
+        print("Erreur renvoi notifications:", e)
+    
     return jsonify({'success': True})
 
 @app.route('/')
@@ -1399,7 +1477,6 @@ def api_simulate():
             days_ago = random.randint(0, 30)
             timestamp = (datetime.now() - timedelta(days=days_ago)).isoformat()
 
-            # Enregistrer l'utilisateur
             c.execute("""INSERT OR IGNORE INTO users (user_id, username, first_name, last_name, first_seen, last_activity, total_orders)
                          VALUES (?, ?, ?, ?, ?, ?, 0)""", 
                       (user_id, username, first_name, last_name, timestamp, timestamp))
@@ -1426,7 +1503,6 @@ def api_simulate():
 
             order_id = c.lastrowid
             
-            # Si terminée, mettre à jour stats cumulatives
             if status == 'terminee':
                 c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
                           (service['price'], service['price'] - service['cost'], datetime.now().isoformat()))
@@ -1453,7 +1529,6 @@ def api_simulate():
 
 # ----------------------- TELEGRAM BOT HANDLERS -----------------------
 
-# Helper pour enregistrer/update user
 def update_user_activity(user_id, username, first_name, last_name):
     """Enregistre ou met à jour l'activité d'un utilisateur"""
     conn = sqlite3.connect('orders.db', check_same_thread=False)
@@ -1478,14 +1553,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     first_name = update.message.from_user.first_name or "Utilisateur"
     last_name = update.message.from_user.last_name or ""
     
-    # Enregistrer l'activité
     update_user_activity(user_id, username, first_name, last_name)
     
-    # Menu principal
+    # Menu principal avec Basic Fit
     keyboard = [
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
-        [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")]
+        [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
+        [InlineKeyboardButton("🏋️ Basic Fit", callback_data="cat_basic_fit")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1495,13 +1570,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Profite de nos offres premium à prix réduits :\n"
         "• Comptes streaming\n"
         "• Abonnements musique\n"
-        "• Services IA\n\n"
+        "• Services IA\n"
+        "• Abonnements fitness\n\n"
         "Choisis une catégorie pour commencer :"
     )
     
-    # Envoyer l'image avec le message
     try:
-        # URL de l'image B4U Deals
         image_url = "https://raw.githubusercontent.com/Noallo312/serveur_express_bot/refs/heads/main/514B1CC0-791F-47CA-825C-F82A4100C02E.png"
         await update.message.reply_photo(
             photo=image_url,
@@ -1510,7 +1584,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=reply_markup
         )
     except Exception as e:
-        # Si l'image ne charge pas, envoyer juste le texte
         print(f"Erreur chargement image: {e}")
         await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
@@ -1523,14 +1596,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     first_name = query.from_user.first_name or "Utilisateur"
     last_name = query.from_user.last_name or ""
     
-    # Update activité
     update_user_activity(user_id, username, first_name, last_name)
     
-    # Catégories
-    if data.startswith("cat_"):
-        category = data.replace("cat_", "")
-        keyboard = []
-        
     # Catégories
     if data.startswith("cat_"):
         category = data.replace("cat_", "")
@@ -1546,7 +1613,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         category_labels = {
             'streaming': '🎬 Streaming',
             'music': '🎧 Musique',
-            'ai': '🤖 Intelligence Artificielle'
+            'ai': '🤖 Intelligence Artificielle',
+            'basic_fit': '🏋️ Basic Fit'
         }
         
         await query.edit_message_caption(
@@ -1629,7 +1697,8 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
-            [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")]
+            [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
+            [InlineKeyboardButton("🏋️ Basic Fit", callback_data="cat_basic_fit")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_caption(
@@ -1666,13 +1735,173 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         row = c.fetchone()
         if not row:
             conn.close()
+            return
+        
+        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
+        
+        client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
+        client_info += f"👤 {order_first_name} {order_last_name}\n"
+        client_info += f"📧 {order_email}\n"
+        if order_payment:
+            client_info += f"💳 {order_payment}\n"
+        
+        admin_text = (
+            f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
+            f"📦 *Service:* {service_name}\n"
+            f"📋 *Plan:* {plan_label}\n"
+            f"💰 *Prix:* {price}€\n"
+            f"💵 *Coût:* {cost}€\n"
+            f"📈 *Bénéfice:* {price - cost}€\n\n"
+            f"*Informations client:*\n"
+            f"{client_info}\n"
+            f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard_data = {
+            "inline_keyboard": [[
+                {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
+                {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
+            ]]
+        }
+        
+        for admin_id in ADMIN_IDS:
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": admin_id,
+                        "text": admin_text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": keyboard_data
+                    },
+                    timeout=10
+                )
+                
+                if response.ok:
+                    result = response.json()
+                    if result.get('ok'):
+                        message_id = result['result']['message_id']
+                        try:
+                            conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                            c2 = conn2.cursor()
+                            c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                                          VALUES (?, ?, ?)""", (order_id, admin_id, message_id))
+                            conn2.commit()
+                            conn2.close()
+                        except Exception as e:
+                            print(f"[order_messages insert] Erreur: {e}")
+            except Exception as e:
+                print(f"Erreur envoi admin {admin_id}: {e}")
+    except Exception as e:
+        print("Erreur resend_order_to_all_admins:", e)
+    finally:
+        conn.close()
+
+async def resend_order_to_all_admins_async(context, order_id: int, service_name: str, plan_label: str, price: float, cost: float, order_username: str, order_user_id: int, order_first_name: str, order_last_name: str, order_email: str, order_payment: str):
+    """Renvoie une commande à tous les admins (async version)"""
+    
+    client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
+    client_info += f"👤 {order_first_name} {order_last_name}\n"
+    client_info += f"📧 {order_email}\n"
+    if order_payment:
+        client_info += f"💳 {order_payment}\n"
+    
+    admin_text = (
+        f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
+        f"📦 *Service:* {service_name}\n"
+        f"📋 *Plan:* {plan_label}\n"
+        f"💰 *Prix:* {price}€\n"
+        f"💵 *Coût:* {cost}€\n"
+        f"📈 *Bénéfice:* {price - cost}€\n\n"
+        f"*Informations client:*\n"
+        f"{client_info}\n"
+        f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    )
+    
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+        InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+    ]])
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            msg = await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+            
+            try:
+                conn = sqlite3.connect('orders.db', check_same_thread=False)
+                c = conn.cursor()
+                c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
+                              VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                print(f"[order_messages insert] Erreur: {e}")
+        except Exception as e:
+            print(f"Erreur envoi admin {admin_id}: {e}")
+
+# ----------------------- Bot runner -----------------------
+def run_bot():
+    """Démarre le bot Telegram dans un thread séparé avec event loop dédié"""
+    if not BOT_TOKEN:
+        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
+        return
+    try:
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
+        app_bot.add_handler(CommandHandler("start", start))
+        app_bot.add_handler(CallbackQueryHandler(button_callback))
+        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+
+        print("🤖 Démarrage du bot Telegram (polling)...")
+        loop.run_until_complete(
+            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
+        )
+
+    except Exception as e:
+        print(f"❌ Erreur critique du bot: {e}")
+        traceback.print_exc()
+    finally:
+        try:
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        except Exception:
+            pass
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+if __name__ == '__main__':
+    # Lancer le bot dans un thread séparé
+    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
+    bot_thread.start()
+
+    # Lancer Flask
+    port = int(os.environ.get('PORT', 10000))
+    app.run(host='0.0.0.0', port=port), first_name, last_name, email, payment_method, admin_id FROM orders WHERE id=?", (order_id,))
+        row = c.fetchone()
+        if not row:
+            conn.close()
             await query.answer("Commande introuvable", show_alert=True)
             return
-        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
+        
+        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment, current_admin_id = row
+
+        # SYSTÈME DE VERROUILLAGE : vérifier si la commande est prise par un autre admin
+        if current_admin_id and current_admin_id != admin_user_id and action in ['take', 'complete', 'cancel']:
+            conn.close()
+            await query.answer("❌ Cette commande est déjà prise par un autre admin", show_alert=True)
+            return
 
         timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
         
-        # Construire les infos client
         client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
         client_info += f"👤 {order_first_name} {order_last_name}\n"
         client_info += f"📧 {order_email}\n"
@@ -1696,14 +1925,15 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🕒 {timestamp}"
             )
             answer_text = "✅ Commande prise en charge"
+            
+            # Supprimer les notifications des autres admins
+            delete_other_admin_notifications(order_id, admin_user_id)
 
         elif action == "complete":
-            # Mettre à jour stats cumulatives
             c.execute("UPDATE cumulative_stats SET total_revenue = total_revenue + ?, total_profit = total_profit + ?, last_updated = ? WHERE id=1",
                       (price, price - cost, datetime.now().isoformat()))
             
-            c.execute("UPDATE orders SET status='terminee', admin_id=?, admin_username=?, taken_at=? WHERE id=?",
-                      (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
+            c.execute("UPDATE orders SET status='terminee' WHERE id=?", (order_id,))
             conn.commit()
             new_text = (
                 f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\n"
@@ -1739,53 +1969,61 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL, cancelled_by=NULL, cancelled_at=NULL WHERE id=?",
                       (order_id,))
             conn.commit()
-            new_text = (
-                f"🔄 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-                f"♻️ Remise en attente par @{admin_username}\n\n"
-                f"📦 *Service:* {service_name}\n"
-                f"📋 *Plan:* {plan_label}\n"
-                f"💰 *Prix:* {price}€\n"
-                f"💵 *Coût:* {cost}€\n"
-                f"📈 *Bénéfice:* {price - cost}€\n\n"
-                f"*Informations client:*\n"
-                f"{client_info}\n"
-                f"🕒 {timestamp}"
-            )
-            answer_text = "✅ Commande remise en ligne"
+            
+            # Supprimer les anciennes notifications
+            c.execute("DELETE FROM order_messages WHERE order_id=?", (order_id,))
+            conn.commit()
+            conn.close()
+            
+            # Renvoyer à tous les admins
+            await resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, order_username, order_user_id, order_first_name, order_last_name, order_email, order_payment)
+            
+            await query.answer("✅ Commande remise en ligne")
+            return
 
         else:
             conn.close()
             await query.answer("Action inconnue", show_alert=True)
             return
 
+        # Mettre à jour le message de l'admin qui a fait l'action
         try:
-            c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
-            rows = c.fetchall()
-            for admin_chat_id, message_id in rows:
-                try:
-                    await context.bot.edit_message_text(
-                        chat_id=admin_chat_id,
-                        message_id=message_id,
-                        text=new_text,
-                        parse_mode='Markdown',
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-                            InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-                            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
-                            InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
-                        ]])
-                    )
-                except Exception as e:
-                    print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
+            # Boutons dynamiques selon le nouveau statut
+            c.execute("SELECT status FROM orders WHERE id=?", (order_id,))
+            current_status = c.fetchone()[0]
+            
+            keyboard = []
+            if current_status == 'en_attente':
+                keyboard = [[
+                    InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+                ]]
+            elif current_status == 'en_cours':
+                keyboard = [[
+                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
+                    InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
+                ]]
+            elif current_status in ['terminee', 'annulee']:
+                keyboard = [[
+                    InlineKeyboardButton("🔄 Remettre en ligne", callback_data=f"admin_restore_{order_id}")
+                ]]
+            
+            await context.bot.edit_message_text(
+                chat_id=admin_user_id,
+                message_id=query.message.message_id,
+                text=new_text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard) if keyboard else None
+            )
         except Exception as e:
-            print(f"[fetch order_messages] Erreur: {e}")
+            print(f"[edit_message] Erreur: {e}")
         finally:
             conn.close()
 
         await query.answer(answer_text)
         return
 
-# ----------------------- TEXT MESSAGE HANDLER -----------------------
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
@@ -1794,7 +2032,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     full_name_tg = f"{first_name_tg} {last_name_tg}".strip() or f"User_{user_id}"
     text = update.message.text
     
-    # Update activité
     update_user_activity(user_id, username, first_name_tg, last_name_tg)
     
     if user_id not in user_states:
@@ -1824,12 +2061,12 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         
-        # Update total_orders de l'utilisateur
         c.execute("UPDATE users SET total_orders = total_orders + 1, last_activity = ? WHERE user_id = ?",
                   (datetime.now().isoformat(), user_id))
         
         conn.commit()
 
+        # Envoyer aux admins
         for admin_id in ADMIN_IDS:
             try:
                 admin_text = f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
@@ -1849,9 +2086,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
                 keyboard = InlineKeyboardMarkup([[
                     InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-                    InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
-                    InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
+                    InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
                 ]])
 
                 msg = await context.bot.send_message(
@@ -1925,7 +2160,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         order_id = c.lastrowid
         
-        # Update total_orders de l'utilisateur
         c.execute("UPDATE users SET total_orders = total_orders + 1, last_activity = ? WHERE user_id = ?",
                   (datetime.now().isoformat(), user_id))
         
@@ -1947,9 +2181,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-            InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
-            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}"),
-            InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
+            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
         ]])
         
         for admin_id in ADMIN_IDS:
@@ -1989,8 +2221,69 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         del user_states[user_id]
         return
 
-# ----------------------- Helper edit notifications -----------------------
-def edit_notifications_for_order(order_id: int, new_text: str):
+# ----------------------- Helper functions -----------------------
+def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
+    """Supprime les notifications des autres admins (HTTP API sync)"""
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
+        rows = c.fetchall()
+        for admin_chat_id, message_id in rows:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+                    json={
+                        "chat_id": admin_chat_id,
+                        "message_id": message_id
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[delete_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
+        
+        # Supprimer de la DB
+        c.execute("DELETE FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
+        conn.commit()
+    except Exception as e:
+        print("Erreur delete_other_admin_notifications:", e)
+    finally:
+        conn.close()
+
+def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
+    """Édite la notification d'un admin spécifique (HTTP API sync)"""
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT message_id FROM order_messages WHERE order_id=? AND admin_id=?", (order_id, admin_id))
+        row = c.fetchone()
+        if row:
+            message_id = row[0]
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                    json={
+                        "chat_id": admin_id,
+                        "message_id": message_id,
+                        "text": new_text,
+                        "parse_mode": "Markdown"
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[edit_message] Erreur admin {admin_id} msg {message_id}: {e}")
+    except Exception as e:
+        print("Erreur edit_admin_notification:", e)
+    finally:
+        conn.close()
+
+def edit_all_admin_notifications(order_id: int, new_text: str):
     """Édite toutes les notifications pour une commande (HTTP API sync)"""
     if not BOT_TOKEN:
         return
@@ -2013,51 +2306,18 @@ def edit_notifications_for_order(order_id: int, new_text: str):
                     timeout=10
                 )
             except Exception as e:
-                print(f"[edit_notifications] Erreur admin {admin_chat_id} msg {message_id}: {e}")
+                print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
     except Exception as e:
-        print("Erreur récupérer order_messages:", e)
+        print("Erreur edit_all_admin_notifications:", e)
     finally:
         conn.close()
 
-# ----------------------- Bot runner -----------------------
-def run_bot():
-    """Démarre le bot Telegram dans un thread séparé avec event loop dédié"""
+def resend_order_to_all_admins(order_id: int):
+    """Renvoie une commande à tous les admins (HTTP API sync)"""
     if not BOT_TOKEN:
-        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
         return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
     try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(CallbackQueryHandler(button_callback))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-
-        print("🤖 Démarrage du bot Telegram (polling)...")
-        loop.run_until_complete(
-            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
-        )
-
-    except Exception as e:
-        print(f"❌ Erreur critique du bot: {e}")
-        traceback.print_exc()
-    finally:
-        try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except Exception:
-            pass
-        try:
-            loop.close()
-        except Exception:
-            pass
-
-if __name__ == '__main__':
-    # Lancer le bot dans un thread séparé
-    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
-    bot_thread.start()
-
-    # Lancer Flask
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+        c.execute("SELECT service, plan, price, cost, user_id, username
