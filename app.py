@@ -2285,7 +2285,7 @@ def run_bot():
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
     
     print("🤖 Bot Telegram démarré")
-    application.run_polling(drop_pending_updates=True)
+    application.run_polling(drop_pending_updates=True, stop_signals=None)
 
 if __name__ == '__main__':
     bot_thread = threading.Thread(target=run_bot, daemon=True)
