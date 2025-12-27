@@ -1,11 +1,5 @@
 # Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives
-# - Système de verrouillage des commandes (un admin prend = invisible pour les autres)
-# - Boutons interactifs dynamiques selon le statut
-# - Ajout du service Basic Fit (catégorie dédiée)
-# - Dashboard utilisateurs avancé avec recherche
-# - Gestion complète des commandes depuis Telegram (prendre/annuler/remettre/terminer)
-# - Stats cumulatives (CA et bénéfices ne reviennent jamais à 0)
-# - Image au lancement du bot
+# Version mise à jour avec nouveaux prix et catégorie Apple
 
 import os
 import sqlite3
@@ -26,7 +20,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# SERVICES_CONFIG - Ajout Basic Fit
+# SERVICES_CONFIG - Version mise à jour
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -34,7 +28,17 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'streaming',
         'plans': {
-            'standard': {'label': 'Netflix Premium', 'price': 10.00, 'cost': 1.00}
+            'standard': {'label': 'Netflix Premium', 'price': 9.00, 'cost': 1.00}
+        }
+    },
+    'primevideo': {
+        'name': '🎬 Prime Video',
+        'active': True,
+        'visible': True,
+        'category': 'streaming',
+        'plans': {
+            '1_mois': {'label': 'Prime Video 1 mois', 'price': 5.00, 'cost': 2.50},
+            '6_mois': {'label': 'Prime Video 6 mois', 'price': 15.00, 'cost': 7.50}
         }
     },
     'hbo': {
@@ -52,7 +56,10 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'streaming',
         'plans': {
-            'standard': {'label': 'Crunchyroll Premium', 'price': 5.00, 'cost': 1.00}
+            '1_mois': {'label': 'Crunchyroll 1 mois', 'price': 5.00, 'cost': 2.50},
+            '1_an_fan': {'label': 'Crunchyroll 1 an Fan (profil à vous)', 'price': 10.00, 'cost': 5.00},
+            'mega_fan_profil': {'label': 'Crunchyroll Mega Fan (profil à vous)', 'price': 15.00, 'cost': 7.50},
+            'mega_fan': {'label': 'Crunchyroll Mega Fan', 'price': 20.00, 'cost': 10.00}
         }
     },
     'canal': {
@@ -61,7 +68,7 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'streaming',
         'plans': {
-            'standard': {'label': 'Canal+', 'price': 8.00, 'cost': 1.00}
+            'standard': {'label': 'Canal+', 'price': 9.00, 'cost': 1.00}
         }
     },
     'disney': {
@@ -70,7 +77,7 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'streaming',
         'plans': {
-            'standard': {'label': 'Disney+', 'price': 6.00, 'cost': 1.00}
+            'standard': {'label': 'Disney+', 'price': 7.00, 'cost': 1.00}
         }
     },
     'ufc': {
@@ -98,7 +105,8 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'streaming',
         'plans': {
-            '1_mois': {'label': 'YouTube Premium 1 mois', 'price': 4.00, 'cost': 1.00}
+            '1_mois': {'label': 'YouTube Premium 1 mois', 'price': 5.00, 'cost': 2.50},
+            '1_an': {'label': 'YouTube Premium 1 an', 'price': 30.00, 'cost': 15.00}
         }
     },
     'spotify': {
@@ -107,8 +115,8 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'music',
         'plans': {
-            '2_mois': {'label': 'Spotify Premium 2 mois', 'price': 10.00, 'cost': 1.00},
-            '1_an': {'label': 'Spotify Premium 1 an', 'price': 20.00, 'cost': 1.00}
+            '2_mois': {'label': 'Spotify Premium 2 mois', 'price': 10.00, 'cost': 5.00},
+            '1_an': {'label': 'Spotify Premium 1 an', 'price': 20.00, 'cost': 10.00}
         }
     },
     'deezer': {
@@ -117,7 +125,19 @@ SERVICES_CONFIG = {
         'visible': True,
         'category': 'music',
         'plans': {
-            'premium': {'label': 'Deezer Premium', 'price': 10.00, 'cost': 5.00}
+            'a_vie': {'label': 'Deezer Premium à vie', 'price': 8.00, 'cost': 4.00}
+        }
+    },
+    'appletv_music': {
+        'name': '🍎 Apple TV + Apple Music',
+        'active': True,
+        'visible': True,
+        'category': 'apple',
+        'plans': {
+            '2_mois': {'label': 'Apple TV + Music 2 mois', 'price': 7.00, 'cost': 3.50},
+            '3_mois': {'label': 'Apple TV + Music 3 mois', 'price': 9.00, 'cost': 4.50},
+            '6_mois': {'label': 'Apple TV + Music 6 mois', 'price': 16.00, 'cost': 8.00},
+            '1_an': {'label': 'Apple TV + Music 1 an', 'price': 30.00, 'cost': 14.00}
         }
     },
     'basicfit': {
@@ -593,7 +613,6 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
                 const lockedClass = isLocked ? 'locked' : '';
                 const lockedBadge = isLocked ? `<span class="locked-badge">🔒 Pris par @${order.admin_username || 'Admin'}</span>` : '';
                 
-                // Boutons dynamiques selon le statut
                 let buttons = '';
                 if (order.status === 'en_attente') {
                     buttons = `
@@ -802,6 +821,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
                     <select name="service">
                         <option value="all">Tous les services (aléatoire)</option>
                         <option value="netflix">🎬 Netflix</option>
+                        <option value="primevideo">🎬 Prime Video</option>
                         <option value="hbo">🎬 HBO Max</option>
                         <option value="crunchyroll">🎬 Crunchyroll</option>
                         <option value="canal">🎬 Canal+</option>
@@ -811,6 +831,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
                         <option value="spotify">🎧 Spotify Premium</option>
                         <option value="deezer">🎵 Deezer Premium</option>
                         <option value="chatgpt">🤖 ChatGPT+</option>
+                        <option value="appletv_music">🍎 Apple TV + Music</option>
                         <option value="basicfit">🏋️ Basic Fit</option>
                     </select>
                 </div>
@@ -1532,9 +1553,7 @@ def update_user_activity(user_id, username, first_name, last_name):
         c.execute("""INSERT INTO users (user_id, username, first_name, last_name, first_seen, last_activity, total_orders)
                      VALUES (?, ?, ?, ?, ?, ?, 0)""",
                   (user_id, username, first_name, last_name, now, now))
-# Full app.py - Dashboard B4U Deals - PARTIE 2/2
-# Suite des handlers Telegram et fonctions helper
-
+    
     conn.commit()
     conn.close()
 
@@ -1551,6 +1570,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
         [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
         [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
+        [InlineKeyboardButton("🍎 Apple (TV + Music)", callback_data="cat_apple")],
         [InlineKeyboardButton("🏋️ Basic Fit", callback_data="cat_basic_fit")]
     ]
     
@@ -1562,6 +1582,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Comptes streaming\n"
         "• Abonnements musique\n"
         "• Services IA\n"
+        "• Services Apple\n"
         "• Abonnements fitness\n\n"
         "Choisis une catégorie pour commencer :"
     )
@@ -1605,6 +1626,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             'streaming': '🎬 Streaming',
             'music': '🎧 Musique',
             'ai': '🤖 Intelligence Artificielle',
+            'apple': '🍎 Apple',
             'basic_fit': '🏋️ Basic Fit'
         }
         
@@ -1689,6 +1711,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🎬 Streaming (Netflix, HBO, Disney+...)", callback_data="cat_streaming")],
             [InlineKeyboardButton("🎧 Musique (Spotify, Deezer)", callback_data="cat_music")],
             [InlineKeyboardButton("🤖 IA (ChatGPT+)", callback_data="cat_ai")],
+            [InlineKeyboardButton("🍎 Apple (TV + Music)", callback_data="cat_apple")],
             [InlineKeyboardButton("🏋️ Basic Fit", callback_data="cat_basic_fit")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -2117,7 +2140,7 @@ def edit_all_admin_notifications(order_id: int, new_text: str):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     try:
-        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
         rows = c.fetchall()
         for admin_chat_id, message_id in rows:
             try:
@@ -2145,38 +2168,36 @@ def resend_order_to_all_admins(order_id: int):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     try:
-        c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
+        c.execute("SELECT service, plan, price, cost, username, user_id, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
         row = c.fetchone()
         if not row:
             return
         
-        service_name, plan_label, price, cost, order_user_id, order_username, order_first_name, order_last_name, order_email, order_payment = row
+        service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method = row
         
-        client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
-        client_info += f"👤 {order_first_name} {order_last_name}\n"
-        client_info += f"📧 {order_email}\n"
-        if order_payment:
-            client_info += f"💳 {order_payment}\n"
-        
-        admin_text = (
-            f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-            f"📦 *Service:* {service_name}\n"
-            f"📋 *Plan:* {plan_label}\n"
-            f"💰 *Prix:* {price}€\n"
-            f"💵 *Coût:* {cost}€\n"
-            f"📈 *Bénéfice:* {price - cost}€\n\n"
-            f"*Informations client:*\n"
-            f"{client_info}\n"
-            f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
+        if username:
+            admin_text += f"👤 @{username}\n"
+        else:
+            admin_text += f"👤 ID: {user_id}\n"
+        admin_text += (
+            f"📦 {service_name}\n"
+            f"📋 {plan_label}\n"
+            f"💰 {price}€\n"
+            f"💵 Coût: {cost}€\n"
+            f"📈 Bénéf: {price - cost}€\n\n"
+            f"👤 {first_name} {last_name}\n"
+            f"📧 {email}\n"
         )
-        
-        keyboard_data = {
-            "inline_keyboard": [[
-                {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
-                {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
-            ]]
-        }
-        
+        if payment_method:
+            admin_text += f"💳 {payment_method}\n"
+        admin_text += f"\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+        keyboard = [[
+            InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+        ]]
+
         for admin_id in ADMIN_IDS:
             try:
                 response = requests.post(
@@ -2185,55 +2206,50 @@ def resend_order_to_all_admins(order_id: int):
                         "chat_id": admin_id,
                         "text": admin_text,
                         "parse_mode": "Markdown",
-                        "reply_markup": keyboard_data
+                        "reply_markup": {"inline_keyboard": keyboard}
                     },
                     timeout=10
                 )
-                
-                if response.ok:
-                    result = response.json()
-                    if result.get('ok'):
-                        message_id = result['result']['message_id']
-                        try:
-                            conn2 = sqlite3.connect('orders.db', check_same_thread=False)
-                            c2 = conn2.cursor()
-                            c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                                          VALUES (?, ?, ?)""", (order_id, admin_id, message_id))
-                            conn2.commit()
-                            conn2.close()
-                        except Exception as e:
-                            print(f"[order_messages insert] Erreur: {e}")
+                result = response.json()
+                if result.get('ok'):
+                    message_id = result['result']['message_id']
+                    c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
+                              (order_id, admin_id, message_id))
             except Exception as e:
                 print(f"Erreur envoi admin {admin_id}: {e}")
+        
+        conn.commit()
     except Exception as e:
         print("Erreur resend_order_to_all_admins:", e)
     finally:
         conn.close()
 
-async def resend_order_to_all_admins_async(context, order_id: int, service_name: str, plan_label: str, price: float, cost: float, order_username: str, order_user_id: int, order_first_name: str, order_last_name: str, order_email: str, order_payment: str):
-    
-    client_info = f"👤 @{order_username}\n" if order_username else f"👤 ID: {order_user_id}\n"
-    client_info += f"👤 {order_first_name} {order_last_name}\n"
-    client_info += f"📧 {order_email}\n"
-    if order_payment:
-        client_info += f"💳 {order_payment}\n"
-    
-    admin_text = (
-        f"🔔 *COMMANDE #{order_id} — REMISE EN LIGNE*\n\n"
-        f"📦 *Service:* {service_name}\n"
-        f"📋 *Plan:* {plan_label}\n"
-        f"💰 *Prix:* {price}€\n"
-        f"💵 *Coût:* {cost}€\n"
-        f"📈 *Bénéfice:* {price - cost}€\n\n"
-        f"*Informations client:*\n"
-        f"{client_info}\n"
-        f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+async def resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method):
+    admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
+    if username:
+        admin_text += f"👤 @{username}\n"
+    else:
+        admin_text += f"👤 ID: {user_id}\n"
+    admin_text += (
+        f"📦 {service_name}\n"
+        f"📋 {plan_label}\n"
+        f"💰 {price}€\n"
+        f"💵 Coût: {cost}€\n"
+        f"📈 Bénéf: {price - cost}€\n\n"
+        f"👤 {first_name} {last_name}\n"
+        f"📧 {email}\n"
     )
-    
+    if payment_method:
+        admin_text += f"💳 {payment_method}\n"
+    admin_text += f"\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
         InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
     ]])
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
     
     for admin_id in ADMIN_IDS:
         try:
@@ -2243,55 +2259,33 @@ async def resend_order_to_all_admins_async(context, order_id: int, service_name:
                 parse_mode='Markdown',
                 reply_markup=keyboard
             )
-            
-            try:
-                conn = sqlite3.connect('orders.db', check_same_thread=False)
-                c = conn.cursor()
-                c.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
-                              VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
-                conn.commit()
-                conn.close()
-            except Exception as e:
-                print(f"[order_messages insert] Erreur: {e}")
+            c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
+                      (order_id, admin_id, msg.message_id))
         except Exception as e:
             print(f"Erreur envoi admin {admin_id}: {e}")
+    
+    conn.commit()
+    conn.close()
 
-# Bot runner
+# BOT TELEGRAM MAIN
 def run_bot():
     if not BOT_TOKEN:
-        print("BOT_TOKEN non configuré - le bot ne sera pas démarré.")
+        print("BOT_TOKEN non défini")
         return
-    try:
-        import asyncio
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
 
-        app_bot = ApplicationBuilder().token(BOT_TOKEN).build()
-        app_bot.add_handler(CommandHandler("start", start))
-        app_bot.add_handler(CallbackQueryHandler(button_callback))
-        app_bot.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-
-        print("🤖 Démarrage du bot Telegram (polling)...")
-        loop.run_until_complete(
-            app_bot.run_polling(drop_pending_updates=True, stop_signals=None)
-        )
-
-    except Exception as e:
-        print(f"❌ Erreur critique du bot: {e}")
-        traceback.print_exc()
-    finally:
-        try:
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        except Exception:
-            pass
-        try:
-            loop.close()
-        except Exception:
-            pass
+    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CallbackQueryHandler(button_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
+    
+    print("🤖 Bot Telegram démarré")
+    application.run_polling(drop_pending_updates=True)
 
 if __name__ == '__main__':
-    bot_thread = threading.Thread(target=run_bot, daemon=True, name='TelegramBotPolling')
+    bot_thread = threading.Thread(target=run_bot, daemon=True)
     bot_thread.start()
-
-    port = int(os.environ.get('PORT', 10000))
-    app.run(host='0.0.0.0', port=port)
+    
+    port = int(os.getenv('PORT', 10000))
+    print(f"🌐 Serveur Flask démarré sur le port {port}")
+    app.run(host='0.0.0.0', port=port, debug=False)
