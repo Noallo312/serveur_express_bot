@@ -2140,7 +2140,7 @@ def edit_all_admin_notifications(order_id: int, new_text: str):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     try:
-c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+	c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
         rows = c.fetchall()
         for admin_chat_id, message_id in rows:
             try:
@@ -2194,8 +2194,8 @@ def resend_order_to_all_admins(order_id: int):
         admin_text += f"\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
 
         keyboard = [[
-            InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-            InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+            {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
+            {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
         ]]
 
         for admin_id in ADMIN_IDS:
