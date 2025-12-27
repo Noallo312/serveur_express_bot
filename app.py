@@ -2140,7 +2140,7 @@ def edit_all_admin_notifications(order_id: int, new_text: str):
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
     try:
-	c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
         rows = c.fetchall()
         for admin_chat_id, message_id in rows:
             try:
