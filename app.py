@@ -6,6 +6,7 @@ import sqlite3
 import requests
 import random
 import traceback
+import asyncio
 from datetime import datetime, timedelta
 from flask import Flask, render_template_string, request, jsonify, redirect, session
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -2272,6 +2273,10 @@ def run_bot():
     if not BOT_TOKEN:
         print("BOT_TOKEN non défini")
         return
+
+    # Créer un nouvel event loop pour ce thread
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
 
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
