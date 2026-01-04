@@ -1,5 +1,6 @@
 # Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives + Manager React
-# Version complète avec toutes les fonctionnalités (modifié : ajout persistance SERVICES_CONFIG)
+# Version complète avec toutes les fonctionnalités
+
 import os
 import sqlite3
 import requests
@@ -12,7 +13,6 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from functools import wraps
 import threading
-import json
 
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_IDS = [6976573567, 5174507979]
@@ -21,7 +21,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# SERVICES_CONFIG (valeurs par défaut -> peuvent être surchargées depuis services_config.json)
+# SERVICES_CONFIG
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -151,58 +151,6 @@ SERVICES_CONFIG = {
         }
     }
 }
-
-# Persist/Load config file path
-CONFIG_FILE = os.getenv('SERVICES_CONFIG_FILE', 'services_config.json')
-
-def load_services_config():
-    """
-    Charge (merge) la configuration sauvegardée depuis CONFIG_FILE vers SERVICES_CONFIG.
-    Les clés et plans existants sont mis à jour ; les nouvelles clés sont ajoutées.
-    """
-    global SERVICES_CONFIG
-    try:
-        if os.path.exists(CONFIG_FILE):
-            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                saved = json.load(f)
-            # Merge basique : on met à jour les clefs et les plans existants
-            for sk, sd in saved.items():
-                if sk in SERVICES_CONFIG:
-                    # Mettre à jour les champs simples
-                    for key, val in sd.items():
-                        if key != 'plans':
-                            SERVICES_CONFIG[sk][key] = val
-                    # Mettre à jour / ajouter les plans
-                    if 'plans' in sd:
-                        for pk, pv in sd['plans'].items():
-                            if pk in SERVICES_CONFIG[sk].get('plans', {}):
-                                # update existing plan fields
-                                SERVICES_CONFIG[sk]['plans'][pk].update(pv)
-                            else:
-                                # add new plan
-                                SERVICES_CONFIG[sk].setdefault('plans', {})[pk] = pv
-                else:
-                    # Add entirely new service
-                    SERVICES_CONFIG[sk] = sd
-            print("Config services chargée depuis", CONFIG_FILE)
-    except Exception as e:
-        print("Erreur load_services_config:", e)
-
-def save_services_config():
-    """
-    Sauvegarde atomiquement la configuration en mémoire dans CONFIG_FILE.
-    """
-    try:
-        tmp = CONFIG_FILE + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(SERVICES_CONFIG, f, ensure_ascii=False, indent=2)
-        os.replace(tmp, CONFIG_FILE)
-        print("Config services sauvée dans", CONFIG_FILE)
-    except Exception as e:
-        print("Erreur save_services_config:", e)
-
-# Charger la config persistée (si présente) au démarrage
-load_services_config()
 
 user_states = {}
 
@@ -960,7 +908,592 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </body>
 </html>
 '''
-# ... (le reste du fichier est inchangé sauf les endpoints qui sauvegardent la config)
+HTML_USERS = '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Utilisateurs - B4U Deals</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f5f7fa;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .back-btn {
+            background: rgba(255,255,255,0.2);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 8px;
+            text-decoration: none;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 20px auto;
+            padding: 0 20px;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .stat-card {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        .stat-card h3 {
+            color: #666;
+            font-size: 13px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        .stat-card .value {
+            font-size: 32px;
+            font-weight: bold;
+            color: #667eea;
+        }
+        .users-section {
+            background: white;
+            padding: 25px;
+            border-radius: 15px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.08);
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 15px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+        th {
+            background: #f9fafb;
+            font-weight: 600;
+            color: #333;
+        }
+        tr:hover {
+            background: #f9fafb;
+        }
+        .search-box {
+            margin-bottom: 20px;
+            padding: 12px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            width: 100%;
+            max-width: 400px;
+        }
+        .btn-view {
+            padding: 8px 15px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 13px;
+        }
+        .btn-view:hover {
+            background: #5568d3;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 30px;
+            border-radius: 15px;
+            width: 90%;
+            max-width: 600px;
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+        .close {
+            color: #aaa;
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: #000;
+        }
+        .order-item {
+            padding: 12px;
+            background: #f9fafb;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            border-left: 4px solid #667eea;
+        }
+        .badge {
+            display: inline-block;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 600;
+            margin-left: 8px;
+        }
+        .badge-active {
+            background: #d1e7dd;
+            color: #0f5132;
+        }
+        .badge-inactive {
+            background: #f8d7da;
+            color: #842029;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>👥 Gestion des Utilisateurs</h1>
+        <a href="/dashboard" class="back-btn">← Dashboard</a>
+    </div>
+
+    <div class="container">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3>👥 Total Utilisateurs</h3>
+                <div class="value" id="total-users">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>🛒 Clients Actifs</h3>
+                <div class="value" id="active-users">0</div>
+            </div>
+            <div class="stat-card">
+                <h3>📈 Taux Conversion</h3>
+                <div class="value" id="conversion-rate">0%</div>
+            </div>
+            <div class="stat-card">
+                <h3>🆕 Nouveaux (7j)</h3>
+                <div class="value" id="new-users">0</div>
+            </div>
+        </div>
+
+        <div class="users-section">
+            <h2 style="margin-bottom:20px">📊 Liste des Utilisateurs</h2>
+            <input type="text" class="search-box" id="searchBox" placeholder="🔍 Rechercher un utilisateur..." onkeyup="filterTable()">
+            <table id="usersTable">
+                <thead>
+                    <tr>
+                        <th>👤 Utilisateur</th>
+                        <th>📞 Telegram</th>
+                        <th>📊 Statut</th>
+                        <th>🛒 Commandes</th>
+                        <th>📅 Première visite</th>
+                        <th>🕐 Dernière activité</th>
+                        <th>📋 Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="users-body"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="detailsModal" class="modal">
+        <div class="modal-content">
+            <span class="close" onclick="closeModal()">&times;</span>
+            <h2 id="modal-title">Détails</h2>
+            <div id="modal-body"></div>
+        </div>
+    </div>
+
+    <script>
+        async function loadUsers() {
+            const response = await fetch('/api/users');
+            const data = await response.json();
+            
+            document.getElementById('total-users').textContent = data.stats.total_users;
+            document.getElementById('active-users').textContent = data.stats.active_users;
+            document.getElementById('conversion-rate').textContent = data.stats.conversion_rate + '%';
+            document.getElementById('new-users').textContent = data.stats.new_users;
+            
+            const tbody = document.getElementById('users-body');
+            tbody.innerHTML = data.users.map(u => {
+                const isActive = u.total_orders > 0;
+                const badge = isActive ? 
+                    '<span class="badge badge-active">✅ Client</span>' : 
+                    '<span class="badge badge-inactive">❌ Inactif</span>';
+                
+                return `
+                    <tr>
+                        <td><strong>${u.first_name || 'Inconnu'} ${u.last_name || ''}</strong></td>
+                        <td>@${u.username || 'N/A'} <br><small style="color:#999">ID: ${u.user_id}</small></td>
+                        <td>${badge}</td>
+                        <td><strong style="color:#667eea;font-size:18px">${u.total_orders}</strong></td>
+                        <td>${new Date(u.first_seen).toLocaleDateString('fr-FR')}</td>
+                        <td>${new Date(u.last_activity).toLocaleDateString('fr-FR')}</td>
+                        <td><button class="btn-view" onclick="showDetails(${u.user_id}, '${u.first_name}', '@${u.username}')">👁️ Voir</button></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        async function showDetails(userId, name, username) {
+            const response = const response = await fetch(`/api/users/${userId}`);
+            const data = await response.json();
+            
+            document.getElementById('modal-title').textContent = `📋 Commandes de ${name} (${username})`;
+            
+            if (data.orders.length === 0) {
+                document.getElementById('modal-body').innerHTML = '<p style="text-align:center;color:#999;padding:40px">Aucune commande</p>';
+            } else {
+                document.getElementById('modal-body').innerHTML = data.orders.map(o => `
+                    <div class="order-item">
+                        <strong>#${o.id} - ${o.service}</strong><br>
+                        <small style="color:#666">📦 ${o.plan} - ${o.price}€</small><br>
+                        <small style="color:#666">📅 ${new Date(o.timestamp).toLocaleString('fr-FR')}</small><br>
+                        <small style="color:#999">Statut: ${o.status}</small>
+                    </div>
+                `).join('');
+            }
+            
+            document.getElementById('detailsModal').style.display = 'block';
+        }
+
+        function closeModal() {
+            document.getElementById('detailsModal').style.display = 'none';
+        }
+
+        function filterTable() {
+            const input = document.getElementById('searchBox');
+            const filter = input.value.toUpperCase();
+            const table = document.getElementById('usersTable');
+            const tr = table.getElementsByTagName('tr');
+            
+            for (let i = 1; i < tr.length; i++) {
+                const td = tr[i].getElementsByTagName('td');
+                let found = false;
+                for (let j = 0; j < td.length; j++) {
+                    if (td[j].innerHTML.toUpperCase().indexOf(filter) > -1) {
+                        found = true;
+                        break;
+                    }
+                }
+                tr[i].style.display = found ? '' : 'none';
+            }
+        }
+
+        window.onclick = function(event) {
+            const modal = document.getElementById('detailsModal');
+            if (event.target == modal) {
+                closeModal();
+            }
+        }
+
+        loadUsers();
+        setInterval(loadUsers, 30000);
+    </script>
+</body>
+</html>
+'''
+
+HTML_REACT_MANAGER = '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Bot Manager - B4U Deals</title>
+    <style>
+        body { font-family: Arial, Helvetica, sans-serif; background:#f5f7fa; margin:0; padding:20px; }
+        .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+        .card { background:white; border-radius:10px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); margin-bottom:12px; }
+        .service-header { display:flex; align-items:center; gap:12px; }
+        .emoji { font-size:28px; }
+        .service-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
+        .plans { margin-top:12px; gap:8px; display:flex; flex-direction:column; }
+        .plan { display:flex; gap:8px; align-items:center; }
+        input[type="text"], input[type="number"], select { padding:8px; border:1px solid #ddd; border-radius:6px; }
+        button { background:#667eea; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+        button.secondary { background:#10b981; }
+        .small { font-size:13px; color:#666; }
+        label { font-size:13px; color:#333; }
+        .muted { color:#888; font-size:13px; }
+        .save-global { position:fixed; right:20px; bottom:20px; padding:12px 16px; border-radius:12px; background:#f59e0b; color:white; box-shadow:0 8px 30px rgba(0,0,0,0.12); }
+    </style>
+</head>
+<body>
+    <div class="top">
+        <div>
+            <h1>B4U Bot Manager</h1>
+            <div class="muted">Éditez la configuration des services et plans</div>
+        </div>
+        <div>
+            <a href="/dashboard"><button>← Dashboard</button></a>
+        </div>
+    </div>
+
+    <div id="content"></div>
+
+    <button id="saveAll" class="save-global" style="display:none">Sauvegarder les changements</button>
+
+    <script>
+    (function () {
+        const content = document.getElementById('content');
+        const saveAllBtn = document.getElementById('saveAll');
+        let servicesState = {};
+        let hasChanges = false;
+
+        function setDirty(v) {
+            hasChanges = v;
+            saveAllBtn.style.display = v ? 'block' : 'none';
+        }
+
+        async function loadServices() {
+            content.innerHTML = '<div class="card small">Chargement...</div>';
+            try {
+                const res = await fetch('/api/services');
+                const data = await res.json();
+                renderServices(data.services || []);
+            } catch (e) {
+                content.innerHTML = '<div class="card small">Erreur de chargement: ' + e.message + '</div>';
+            }
+        }
+
+        function renderServices(list) {
+            servicesState = {};
+            if (!Array.isArray(list) || list.length === 0) {
+                content.innerHTML = '<div class="card small">Aucun service trouvé</div>';
+                return;
+            }
+            content.innerHTML = '';
+            list.forEach(s => {
+                servicesState[s.service_key] = {
+                    _original: s,
+                    emoji: s.emoji || '',
+                    display_name: s.display_name || '',
+                    active: !!s.active,
+                    visible: !!s.visible,
+                    category: s.category || '',
+                    plans: {}
+                };
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div class="service-header">
+                        <div class="emoji">${s.emoji || '📦'}</div>
+                        <div>
+                            <div><strong class="service-title">${s.emoji} ${s.display_name}</strong></div>
+                            <div class="small">Clé: <code>${s.service_key}</code> · Catégorie: <span class="muted">${s.category}</span></div>
+                        </div>
+                        <div class="service-actions">
+                            <label><input type="checkbox" class="active-checkbox" ${s.active ? 'checked' : ''}> Actif</label>
+                            <label><input type="checkbox" class="visible-checkbox" ${s.visible ? 'checked' : ''}> Visible</label>
+                        </div>
+                    </div>
+                    <div style="margin-top:10px;">
+                        <label>Emoji</label><br>
+                        <input type="text" class="input-emoji" value="${escapeHtml(s.emoji)}" style="width:80px;">
+                        <label style="margin-left:12px">Nom affiché</label><br>
+                        <input type="text" class="input-name" value="${escapeHtml(s.display_name)}" style="width:320px;">
+                        <label style="margin-left:12px">Catégorie</label><br>
+                        <input type="text" class="input-category" value="${escapeHtml(s.category)}" style="width:160px;">
+                    </div>
+                    <div class="plans">
+                        <h4 style="margin-top:12px; margin-bottom:6px;">Plans</h4>
+                        <div class="plans-list"></div>
+                    </div>
+                `;
+                const plansList = card.querySelector('.plans-list');
+
+                s.plans.forEach(plan => {
+                    servicesState[s.service_key].plans[plan.plan_key] = {
+                        label: plan.label,
+                        price: plan.price,
+                        cost: plan.cost
+                    };
+                    const planRow = document.createElement('div');
+                    planRow.className = 'plan';
+                    planRow.innerHTML = `
+                        <div style="flex:1">
+                            <div><strong>${escapeHtml(plan.plan_key)}</strong> · <span class="small">${escapeHtml(plan.label)}</span></div>
+                            <div class="small">Prix: <input type="number" step="0.01" class="input-price" value="${plan.price}" style="width:90px;"> € &nbsp;&nbsp; Coût: <input type="number" step="0.01" class="input-cost" value="${plan.cost}" style="width:90px;"></div>
+                        </div>
+                        <div>
+                            <button class="btn-update-plan secondary">Enregistrer plan</button>
+                        </div>
+                    `;
+                    // wire plan inputs
+                    const inputPrice = planRow.querySelector('.input-price');
+                    const inputCost = planRow.querySelector('.input-cost');
+                    const btnUpdatePlan = planRow.querySelector('.btn-update-plan');
+
+                    inputPrice.addEventListener('change', () => {
+                        servicesState[s.service_key].plans[plan.plan_key].price = parseFloat(inputPrice.value) || 0;
+                        setDirty(true);
+                    });
+                    inputCost.addEventListener('change', () => {
+                        servicesState[s.service_key].plans[plan.plan_key].cost = parseFloat(inputCost.value) || 0;
+                        setDirty(true);
+                    });
+
+                    btnUpdatePlan.addEventListener('click', async () => {
+                        btnUpdatePlan.disabled = true;
+                        btnUpdatePlan.textContent = 'Enregistrement...';
+                        try {
+                            const payload = {
+                                label: servicesState[s.service_key].plans[plan.plan_key].label || plan.label,
+                                price: servicesState[s.service_key].plans[plan.plan_key].price,
+                                cost: servicesState[s.service_key].plans[plan.plan_key].cost
+                            };
+                            const resp = await fetch(`/api/services/${s.service_key}/plans/${plan.plan_key}`, {
+                                method: 'PUT',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(payload)
+                            });
+                            if (!resp.ok) throw new Error('Erreur réseau');
+                            btnUpdatePlan.textContent = '✔';
+                            setTimeout(() => btnUpdatePlan.textContent = 'Enregistrer plan', 1000);
+                            setDirty(false);
+                        } catch (e) {
+                            alert('Erreur sauvegarde plan: ' + e.message);
+                            btnUpdatePlan.disabled = false;
+                            btnUpdatePlan.textContent = 'Enregistrer plan';
+                        }
+                    });
+
+                    plansList.appendChild(planRow);
+                });
+
+                // wire top inputs
+                const inputEmoji = card.querySelector('.input-emoji');
+                const inputName = card.querySelector('.input-name');
+                const inputCategory = card.querySelector('.input-category');
+                const activeCheckbox = card.querySelector('.active-checkbox');
+                const visibleCheckbox = card.querySelector('.visible-checkbox');
+
+                function markAndUpdateHeader() {
+                    const titleEl = card.querySelector('.service-title');
+                    titleEl.textContent = (inputEmoji.value || '') + ' ' + (inputName.value || s.display_name);
+                }
+
+                inputEmoji.addEventListener('input', () => {
+                    servicesState[s.service_key].emoji = inputEmoji.value;
+                    markAndUpdateHeader();
+                    setDirty(true);
+                });
+                inputName.addEventListener('input', () => {
+                    servicesState[s.service_key].display_name = inputName.value;
+                    markAndUpdateHeader();
+                    setDirty(true);
+                });
+                inputCategory.addEventListener('input', () => {
+                    servicesState[s.service_key].category = inputCategory.value;
+                    card.querySelector('.muted').textContent = inputCategory.value;
+                    setDirty(true);
+                });
+                activeCheckbox.addEventListener('change', () => {
+                    servicesState[s.service_key].active = activeCheckbox.checked;
+                    setDirty(true);
+                });
+                visibleCheckbox.addEventListener('change', () => {
+                    servicesState[s.service_key].visible = visibleCheckbox.checked;
+                    setDirty(true);
+                });
+
+                // add save service button
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = 'Sauvegarder service';
+                saveBtn.style.marginLeft = '12px';
+                saveBtn.addEventListener('click', async () => {
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = 'Enregistrement...';
+                    try {
+                        const payload = {
+                            name: servicesState[s.service_key].display_name,
+                            emoji: servicesState[s.service_key].emoji,
+                            category: servicesState[s.service_key].category,
+                            active: !!servicesState[s.service_key].active,
+                            visible: !!servicesState[s.service_key].visible
+                        };
+                        const resp = await fetch(`/api/services/${s.service_key}`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) throw new Error('Erreur réseau');
+                        saveBtn.textContent = '✔';
+                        setTimeout(() => saveBtn.textContent = 'Sauvegarder service', 1000);
+                        setDirty(false);
+                    } catch (e) {
+                        alert('Erreur sauvegarde service: ' + e.message);
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = 'Sauvegarder service';
+                    }
+                });
+
+                card.querySelector('.service-actions').appendChild(saveBtn);
+                content.appendChild(card);
+            });
+        }
+
+        // global save button (saves each modified service and its plans)
+        saveAllBtn.addEventListener('click', async () => {
+            saveAllBtn.disabled = true;
+            saveAllBtn.textContent = 'Enregistrement...';
+            try {
+                for (const [serviceKey, s] of Object.entries(servicesState)) {
+                    // save service
+                    const payload = {
+                        name: s.display_name,
+                        emoji: s.emoji,
+                        category: s.category,
+                        active: !!s.active,
+                        visible: !!s.visible
+                    };
+                    await fetch(`/api/services/${serviceKey}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    // save plans
+                    for (const [planKey, p] of Object.entries(s.plans)) {
+                        await fetch(`/api/services/${serviceKey}/plans/${planKey}`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(p)
+                        });
+                    }
+                }
+                alert('✅ Configuration sauvegardée');
+                setDirty(false);
+            } catch (e) {
+                alert('Erreur lors de la sauvegarde: ' + e.message);
+            } finally {
+                saveAllBtn.disabled = false;
+                saveAllBtn.textContent = 'Sauvegarder les changements';
+            }
+        });
+
+        function escapeHtml(str) {
+            if (!str && str !== 0) return '';
+            return String(str).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]; });
+        }
+
+        loadServices();
+    })();
+    </script>
+</body>
+</html>
+'''
 # Routes Flask
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1034,13 +1567,11 @@ def api_update_service(service_key):
         return jsonify({'error': 'Service not found'}), 404
     
     data = request.get_json()
-    # combine emoji + name in same field to conserver format existant
-    SERVICES_CONFIG[service_key]['name'] = f"{data.get('emoji','')} {data.get('name','')}".strip()
-    SERVICES_CONFIG[service_key]['active'] = data.get('active', SERVICES_CONFIG[service_key].get('active', True))
-    SERVICES_CONFIG[service_key]['visible'] = data.get('visible', SERVICES_CONFIG[service_key].get('visible', True))
-    SERVICES_CONFIG[service_key]['category'] = data.get('category', SERVICES_CONFIG[service_key].get('category',''))
-    # Persister
-    save_services_config()
+    SERVICES_CONFIG[service_key]['name'] = f"{data['emoji']} {data['name']}"
+    SERVICES_CONFIG[service_key]['active'] = data['active']
+    SERVICES_CONFIG[service_key]['visible'] = data['visible']
+    SERVICES_CONFIG[service_key]['category'] = data['category']
+    
     return jsonify({'success': True})
 
 @app.route('/api/services/<service_key>/plans/<plan_key>', methods=['PUT'])
@@ -1052,10 +1583,8 @@ def api_update_plan(service_key, plan_key):
         return jsonify({'error': 'Plan not found'}), 404
     
     data = request.get_json()
-    # Mettre à jour en mémoire
     SERVICES_CONFIG[service_key]['plans'][plan_key].update(data)
-    # Persister
-    save_services_config()
+    
     return jsonify({'success': True})
 
 # Autres routes API existantes
@@ -1622,7 +2151,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"Erreur chargement image: {e}")
         await update.message.reply_text(welcome_text, parse_mode='Markdown', reply_markup=reply_markup)
 
-# ... (reste du code identique : handlers, bot run, etc.)
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
