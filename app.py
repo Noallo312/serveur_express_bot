@@ -1,5 +1,5 @@
-# Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives
-# Version mise à jour avec nouveaux prix et catégorie Apple
+# Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives + Manager React
+# Version complète avec toutes les fonctionnalités
 
 import os
 import sqlite3
@@ -21,7 +21,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# SERVICES_CONFIG - Version mise à jour
+# SERVICES_CONFIG
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -162,7 +162,7 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# DATABASE avec table users + statistiques cumulatives
+# DATABASE
 def init_db():
     conn = sqlite3.connect('orders.db', check_same_thread=False)
     c = conn.cursor()
@@ -217,7 +217,6 @@ def init_db():
     conn.close()
 
 init_db()
-
 # ----------------------- HTML TEMPLATES -----------------------
 HTML_LOGIN = '''<!DOCTYPE html>
 <html lang="fr">
@@ -325,7 +324,7 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             display: flex;
             gap: 10px;
         }
-        .logout-btn, .simulate-btn, .users-btn {
+        .logout-btn, .simulate-btn, .users-btn, .manager-btn {
             background: rgba(255,255,255,0.2);
             color: white;
             padding: 10px 20px;
@@ -333,6 +332,15 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
             border-radius: 8px;
             text-decoration: none;
             cursor: pointer;
+            transition: all 0.3s;
+        }
+        .manager-btn {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            font-weight: 600;
+        }
+        .manager-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(240, 147, 251, 0.4);
         }
         .simulate-btn {
             background: rgba(255,255,255,0.3);
@@ -520,6 +528,7 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
     <div class="header">
         <h1>🎯 B4U Deals - Dashboard Admin</h1>
         <div class="header-actions">
+            <a href="/manager" class="manager-btn">🎛️ Manager</a>
             <a href="/users" class="users-btn">👥 Utilisateurs</a>
             <a href="/simulate" class="simulate-btn">🎲 Simuler</a>
             <a href="/logout" class="logout-btn">Déconnexion</a>
@@ -678,21 +687,21 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
 
         async function completeOrder(orderId) {
             if (confirm('Marquer cette commande comme terminée ?')) {
-                await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
                 loadData();
             }
         }
 
         async function cancelOrder(orderId) {
             if (confirm('Annuler cette commande ?')) {
-                await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
                 loadData();
             }
         }
 
         async function restoreOrder(orderId) {
             if (confirm('Remettre cette commande en ligne ?')) {
-                await fetch(`/api/order/${orderId}/restore`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
                 loadData();
             }
         }
@@ -899,7 +908,6 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </body>
 </html>
 '''
-
 HTML_USERS = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1140,7 +1148,7 @@ HTML_USERS = '''<!DOCTYPE html>
         }
 
         async function showDetails(userId, name, username) {
-            const response = await fetch(`/api/users/${userId}`);
+            const response = const response = await fetch(`/api/users/${userId}`);
             const data = await response.json();
             
             document.getElementById('modal-title').textContent = `📋 Commandes de ${name} (${username})`;
@@ -1198,6 +1206,328 @@ HTML_USERS = '''<!DOCTYPE html>
 </html>
 '''
 
+HTML_REACT_MANAGER = '''<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bot Manager - B4U Deals</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        
+        const Settings = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
+        const Edit2 = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>;
+        const Save = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>;
+        const Eye = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
+        const EyeOff = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>;
+        const AlertCircle = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+
+        const BotAdminManager = () => {
+            const [services, setServices] = useState({});
+            const [hasChanges, setHasChanges] = useState(false);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                loadConfig();
+            }, []);
+
+            const loadConfig = async () => {
+                try {
+                    const response = await fetch('/api/services');
+                    const data = await response.json();
+                    
+                    const servicesObj = {};
+                    data.services.forEach(service => {
+                        const plansObj = {};
+                        service.plans.forEach(plan => {
+                            plansObj[plan.plan_key] = {
+                                label: plan.label,
+                                price: plan.price,
+                                cost: plan.cost
+                            };
+                        });
+                        
+                        servicesObj[service.service_key] = {
+                            name: service.emoji + ' ' + service.display_name,
+                            active: service.active,
+                            visible: service.visible,
+                            category: service.category,
+                            plans: plansObj
+                        };
+                    });
+                    
+                    setServices(servicesObj);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Erreur chargement:', error);
+                    setLoading(false);
+                }
+            };
+
+            const saveConfig = async () => {
+                try {
+                    for (const [serviceKey, service] of Object.entries(services)) {
+                        const parts = service.name.split(' ');
+                        const emoji = parts[0];
+                        const name = parts.slice(1).join(' ');
+                        
+                        await fetch(`/api/services/${serviceKey}`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                name: name,
+                                emoji: emoji,
+                                category: service.category,
+                                active: service.active,
+                                visible: service.visible
+                            })
+                        });
+                        
+                        for (const [planKey, plan] of Object.entries(service.plans)) {
+                            await fetch(`/api/services/${serviceKey}/plans/${planKey}`, {
+                                method: 'PUT',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify(plan)
+                            });
+                        }
+                    }
+                    
+                    setHasChanges(false);
+                    alert('✅ Configuration sauvegardée !');
+                    loadConfig();
+                } catch (error) {
+                    console.error('Erreur sauvegarde:', error);
+                    alert('❌ Erreur lors de la sauvegarde');
+                }
+            };
+
+            const updateService = (serviceId, updates) => {
+                setServices({
+                    ...services,
+                    [serviceId]: {
+                        ...services[serviceId],
+                        ...updates
+                    }
+                });
+                setHasChanges(true);
+            };
+
+            const updatePlan = (serviceId, planId, updates) => {
+                setServices({
+                    ...services,
+                    [serviceId]: {
+                        ...services[serviceId],
+                        plans: {
+                            ...services[serviceId].plans,
+                            [planId]: {
+                                ...services[serviceId].plans[planId],
+                                ...updates
+                            }
+                        }
+                    }
+                });
+                setHasChanges(true);
+            };
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+                        <div className="text-2xl font-bold text-indigo-600">Chargement...</div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
+                    <div className="max-w-7xl mx-auto mb-6">
+                        <div className="bg-white rounded-2xl shadow-lg p-6">
+                            <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-3">
+                                    <Settings />
+                                    <div>
+                                        <h1 className="text-3xl font-bold text-gray-800">B4U Bot Manager</h1>
+                                        <p className="text-gray-600">Gérez votre bot sans toucher au code</p>
+                                    </div>
+                                </div>
+                                <div className="flex gap-3">
+                                    {hasChanges && (
+                                        <button
+                                            onClick={saveConfig}
+                                            className="flex items-center gap-2 bg-green-500 text-white px-6 py-3 rounded-xl hover:bg-green-600 transition shadow-lg"
+                                        >
+                                            <Save />
+                                            Sauvegarder
+                                        </button>
+                                    )}
+                                    
+                                        href="/dashboard"
+                                        className="flex items-center gap-2 bg-gray-500 text-white px-6 py-3 rounded-xl hover:bg-gray-600 transition"
+                                    >
+                                        ← Dashboard
+                                    </a>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="max-w-7xl mx-auto">
+                        <div className="grid gap-4">
+                            {Object.entries(services).map(([serviceId, service]) => (
+                                <ServiceCard
+                                    key={serviceId}
+                                    serviceId={serviceId}
+                                    service={service}
+                                    onUpdate={updateService}
+                                    onUpdatePlan={updatePlan}
+                                />
+                            ))}
+                        </div>
+                    </div>
+
+                    {hasChanges && (
+                        <div className="fixed bottom-6 right-6 bg-yellow-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
+                            <AlertCircle />
+                            <span className="font-semibold">Modifications non sauvegardées</span>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ServiceCard = ({ serviceId, service, onUpdate, onUpdatePlan }) => {
+            const [isExpanded, setIsExpanded] = useState(false);
+
+            return (
+                <div className="bg-white rounded-xl shadow-md overflow-hidden">
+                    <div className="p-6">
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-4 flex-1">
+                                <div className="text-3xl">{service.name.split(' ')[0]}</div>
+                                <div className="flex-1">
+                                    <h3 className="text-xl font-bold text-gray-800">{service.name}</h3>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-sm text-gray-500">
+                                            Catégorie: {service.category}
+                                        </span>
+                                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                            service.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
+                                        }`}>
+                                            {service.active ? 'Actif' : 'Inactif'}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                <button
+                                    onClick={() => onUpdate(serviceId, { visible: !service.visible })}
+                                    className={`p-2 rounded-lg transition ${
+                                        service.visible ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
+                                    }`}
+                                >
+                                    {service.visible ? <Eye /> : <EyeOff />}
+                                </button>
+                                <button
+                                    onClick={() => setIsExpanded(!isExpanded)}
+                                    className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition"
+                                >
+                                    {isExpanded ? '▲' : '▼'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {isExpanded && (
+                            <div className="mt-6 space-y-4 border-t pt-4">
+                                <h4 className="font-semibold text-gray-700">Plans tarifaires ({Object.keys(service.plans).length})</h4>
+                                <div className="space-y-3">
+                                    {Object.entries(service.plans).map(([planId, plan]) => (
+                                        <PlanCard
+                                            key={planId}
+                                            planId={planId}
+                                            plan={plan}
+                                            onUpdate={(updates) => onUpdatePlan(serviceId, planId, updates)}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const PlanCard = ({ planId, plan, onUpdate }) => {
+            const [isEditing, setIsEditing] = useState(false);
+            const profit = plan.price - plan.cost;
+            const margin = ((profit / plan.price) * 100).toFixed(1);
+
+            return (
+                <div className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
+                    <div className="flex items-center justify-between">
+                        <div className="flex-1">
+                            {isEditing ? (
+                                <div className="space-y-2">
+                                    <input
+                                        type="text"
+                                        value={plan.label}
+                                        onChange={(e) => onUpdate({ label: e.target.value })}
+                                        className="w-full px-3 py-2 border rounded-lg"
+                                    />
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={plan.price}
+                                            onChange={(e) => onUpdate({ price: parseFloat(e.target.value) })}
+                                            className="px-3 py-2 border rounded-lg"
+                                        />
+                                        <input
+                                            type="number"
+                                            step="0.01"
+                                            value={plan.cost}
+                                            onChange={(e) => onUpdate({ cost: parseFloat(e.target.value) })}
+                                            className="px-3 py-2 border rounded-lg"
+                                        />
+                                    </div>
+                                </div>
+                            ) : (
+                                <div>
+                                    <h5 className="font-semibold text-gray-800">{plan.label}</h5>
+                                    <div className="flex items-center gap-4 mt-1 text-sm">
+                                        <span className="text-green-600 font-bold">{plan.price}€</span>
+                                        <span className="text-gray-500">Coût: {plan.cost}€</span>
+                                        <span className="text-blue-600 font-semibold">
+                                            Bénéf: {profit.toFixed(2)}€ ({margin}%)
+                                        </span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        <button
+                            onClick={() => setIsEditing(!isEditing)}
+                            className="p-2 bg-white rounded-lg hover:bg-gray-100 transition ml-3"
+                        >
+                            {isEditing ? <Save /> : <Edit2 />}
+                        </button>
+                    </div>
+                </div>
+            );
+        };
+
+        ReactDOM.render(<BotAdminManager />, document.getElementById('root'));
+    </script>
+</body>
+</html>
+'''
 # Routes Flask
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1228,6 +1558,70 @@ def simulate():
 def users_page():
     return render_template_string(HTML_USERS)
 
+@app.route('/manager')
+@login_required
+def manager_page():
+    return render_template_string(HTML_REACT_MANAGER)
+
+# API Routes pour le Manager React
+@app.route('/api/services', methods=['GET'])
+@login_required
+def api_services_list():
+    services = []
+    for service_key, service_data in SERVICES_CONFIG.items():
+        plans = []
+        for plan_key, plan_data in service_data['plans'].items():
+            plans.append({
+                'plan_key': plan_key,
+                'label': plan_data['label'],
+                'price': plan_data['price'],
+                'cost': plan_data['cost']
+            })
+        
+        name_parts = service_data['name'].split(' ', 1)
+        emoji = name_parts[0] if len(name_parts) > 1 else '📦'
+        display_name = name_parts[1] if len(name_parts) > 1 else service_data['name']
+        
+        services.append({
+            'service_key': service_key,
+            'emoji': emoji,
+            'display_name': display_name,
+            'active': service_data['active'],
+            'visible': service_data.get('visible', True),
+            'category': service_data['category'],
+            'plans': plans
+        })
+    
+    return jsonify({'services': services})
+
+@app.route('/api/services/<service_key>', methods=['PUT'])
+@login_required
+def api_update_service(service_key):
+    if service_key not in SERVICES_CONFIG:
+        return jsonify({'error': 'Service not found'}), 404
+    
+    data = request.get_json()
+    SERVICES_CONFIG[service_key]['name'] = f"{data['emoji']} {data['name']}"
+    SERVICES_CONFIG[service_key]['active'] = data['active']
+    SERVICES_CONFIG[service_key]['visible'] = data['visible']
+    SERVICES_CONFIG[service_key]['category'] = data['category']
+    
+    return jsonify({'success': True})
+
+@app.route('/api/services/<service_key>/plans/<plan_key>', methods=['PUT'])
+@login_required
+def api_update_plan(service_key, plan_key):
+    if service_key not in SERVICES_CONFIG:
+        return jsonify({'error': 'Service not found'}), 404
+    if plan_key not in SERVICES_CONFIG[service_key]['plans']:
+        return jsonify({'error': 'Plan not found'}), 404
+    
+    data = request.get_json()
+    SERVICES_CONFIG[service_key]['plans'][plan_key].update(data)
+    
+    return jsonify({'success': True})
+
+# Autres routes API existantes
 @app.route('/api/users')
 @login_required
 def api_users():
@@ -1364,7 +1758,7 @@ def take_order(order_id):
     conn.close()
     try:
         delete_other_admin_notifications(order_id, 999999)
-        edit_admin_notification(order_id, 999999, f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n✅ Pris en charge via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        edit_admin_notification(order_id, 999999, f"🔒 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n✅ Pris en charge via le dashboard\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
         print("Erreur notifications:", e)
     return jsonify({'success': True})
@@ -1386,7 +1780,7 @@ def complete_order(order_id):
     conn.commit()
     conn.close()
     try:
-        edit_all_admin_notifications(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        edit_all_admin_notifications(order_id, f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\nTerminée via le dashboard\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
         print("Erreur notifications:", e)
     return jsonify({'success': True})
@@ -1401,7 +1795,7 @@ def cancel_order(order_id):
     conn.commit()
     conn.close()
     try:
-        edit_all_admin_notifications(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
+        edit_all_admin_notifications(order_id, f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\nAnnulée via le dashboard\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}")
     except Exception as e:
         print("Erreur notifications:", e)
     return jsonify({'success': True})
@@ -1558,6 +1952,197 @@ def update_user_activity(user_id, username, first_name, last_name):
     conn.commit()
     conn.close()
 
+def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
+        rows = c.fetchall()
+        for admin_chat_id, message_id in rows:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
+                    json={
+                        "chat_id": admin_chat_id,
+                        "message_id": message_id
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[delete_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
+        
+        c.execute("DELETE FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
+        conn.commit()
+    except Exception as e:
+        print("Erreur delete_other_admin_notifications:", e)
+    finally:
+        conn.close()
+
+def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT message_id FROM order_messages WHERE order_id=? AND admin_id=?", (order_id, admin_id))
+        row = c.fetchone()
+        if row:
+            message_id = row[0]
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                    json={
+                        "chat_id": admin_id,
+                        "message_id": message_id,
+                        "text": new_text,
+                        "parse_mode": "Markdown"
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[edit_message] Erreur admin {admin_id} msg {message_id}: {e}")
+    except Exception as e:
+        print("Erreur edit_admin_notification:", e)
+    finally:
+        conn.close()
+
+def edit_all_admin_notifications(order_id: int, new_text: str):
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
+        rows = c.fetchall()
+        for admin_chat_id, message_id in rows:
+            try:
+                requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
+                    json={
+                        "chat_id": admin_chat_id,
+                        "message_id": message_id,
+                        "text": new_text,
+                        "parse_mode": "Markdown"
+                    },
+                    timeout=10
+                )
+            except Exception as e:
+                print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
+    except Exception as e:
+        print("Erreur edit_all_admin_notifications:", e)
+    finally:
+        conn.close()
+
+def resend_order_to_all_admins(order_id: int):
+    if not BOT_TOKEN:
+        return
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT service, plan, price, cost, username, user_id, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
+        row = c.fetchone()
+        if not row:
+            return
+        
+        service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method = row
+        
+        admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
+        if username:
+            admin_text += f"👤 @{username}\n"
+        else:
+            admin_text += f"👤 ID: {user_id}\n"
+        admin_text += (
+            f"📦 {service_name}\n"
+            f"📋 {plan_label}\n"
+            f"💰 {price}€\n"
+            f"💵 Coût: {cost}€\n"
+            f"📈 Bénéf: {price - cost}€\n\n"
+            f"👤 {first_name} {last_name}\n"
+            f"📧 {email}\n"
+        )
+        if payment_method:
+            admin_text += f"💳 {payment_method}\n"
+        admin_text += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+        keyboard = [[
+            {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
+            {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
+        ]]
+
+        for admin_id in ADMIN_IDS:
+            try:
+                response = requests.post(
+                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                    json={
+                        "chat_id": admin_id,
+                        "text": admin_text,
+                        "parse_mode": "Markdown",
+                        "reply_markup": {"inline_keyboard": keyboard}
+                    },
+                    timeout=10
+                )
+                result = response.json()
+                if result.get('ok'):
+                    message_id = result['result']['message_id']
+                    c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
+                              (order_id, admin_id, message_id))
+            except Exception as e:
+                print(f"Erreur envoi admin {admin_id}: {e}")
+        
+        conn.commit()
+    except Exception as e:
+        print("Erreur resend_order_to_all_admins:", e)
+    finally:
+        conn.close()
+
+async def resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method):
+    admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
+    if username:
+        admin_text += f"👤 @{username}\n"
+    else:
+        admin_text += f"👤 ID: {user_id}\n"
+    admin_text += (
+        f"📦 {service_name}\n"
+        f"📋 {plan_label}\n"
+        f"💰 {price}€\n"
+        f"💵 Coût: {cost}€\n"
+        f"📈 Bénéf: {price - cost}€\n\n"
+        f"👤 {first_name} {last_name}\n"
+        f"📧 {email}\n"
+    )
+    if payment_method:
+        admin_text += f"💳 {payment_method}\n"
+    admin_text += f"\n🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+        InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+    ]])
+
+    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    c = conn.cursor()
+    
+    for admin_id in ADMIN_IDS:
+        try:
+            msg = await context.bot.send_message(
+                chat_id=admin_id,
+                text=admin_text,
+                parse_mode='Markdown',
+                reply_markup=keyboard
+            )
+            c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
+                      (order_id, admin_id, msg.message_id))
+        except Exception as e:
+            print(f"Erreur envoi admin {admin_id}: {e}")
+    
+    conn.commit()
+    conn.close()
 # Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -1774,7 +2359,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                       (admin_user_id, admin_username, datetime.now().isoformat(), order_id))
             conn.commit()
             new_text = (
-                f"🔔 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n"
+                f"🔒 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n"
                 f"✅ Pris en charge par @{admin_username}\n\n"
                 f"📦 *Service:* {service_name}\n"
                 f"📋 *Plan:* {plan_label}\n"
@@ -1783,7 +2368,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📈 *Bénéfice:* {price - cost}€\n\n"
                 f"*Informations client:*\n"
                 f"{client_info}\n"
-                f"🕒 {timestamp}"
+                f"🕐 {timestamp}"
             )
             answer_text = "✅ Commande prise en charge"
             
@@ -1805,7 +2390,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"📈 *Bénéfice:* {price - cost}€\n\n"
                 f"*Informations client:*\n"
                 f"{client_info}\n"
-                f"🕒 {timestamp}"
+                f"🕐 {timestamp}"
             )
             answer_text = "✅ Commande terminée"
 
@@ -1821,7 +2406,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💰 *Prix:* {price}€\n\n"
                 f"*Informations client:*\n"
                 f"{client_info}\n"
-                f"🕒 {timestamp}"
+                f"🕐 {timestamp}"
             )
             answer_text = "✅ Commande annulée"
 
@@ -1879,7 +2464,6 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer(answer_text)
         return
-
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
@@ -1938,7 +2522,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
                     f"👤 {lines[1].strip()} {lines[0].strip()}\n"
                     f"📧 {lines[2].strip()}\n"
-                    f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+                    f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
                 )
 
                 keyboard = InlineKeyboardMarkup([[
@@ -2033,7 +2617,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"👤 {first_name} {last_name}\n"
             f"📧 {email}\n"
             f"💳 Paiement: {payment_method}\n\n"
-            f"🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
         )
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
@@ -2074,199 +2658,6 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         
         del user_states[user_id]
         return
-
-# Helper functions
-def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
-    if not BOT_TOKEN:
-        return
-
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    try:
-        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
-        rows = c.fetchall()
-        for admin_chat_id, message_id in rows:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/deleteMessage",
-                    json={
-                        "chat_id": admin_chat_id,
-                        "message_id": message_id
-                    },
-                    timeout=10
-                )
-            except Exception as e:
-                print(f"[delete_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
-        
-        c.execute("DELETE FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
-        conn.commit()
-    except Exception as e:
-        print("Erreur delete_other_admin_notifications:", e)
-    finally:
-        conn.close()
-
-def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
-    if not BOT_TOKEN:
-        return
-
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    try:
-        c.execute("SELECT message_id FROM order_messages WHERE order_id=? AND admin_id=?", (order_id, admin_id))
-        row = c.fetchone()
-        if row:
-            message_id = row[0]
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
-                    json={
-                        "chat_id": admin_id,
-                        "message_id": message_id,
-                        "text": new_text,
-                        "parse_mode": "Markdown"
-                    },
-                    timeout=10
-                )
-            except Exception as e:
-                print(f"[edit_message] Erreur admin {admin_id} msg {message_id}: {e}")
-    except Exception as e:
-        print("Erreur edit_admin_notification:", e)
-    finally:
-        conn.close()
-
-def edit_all_admin_notifications(order_id: int, new_text: str):
-    if not BOT_TOKEN:
-        return
-
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    try:
-        c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
-        rows = c.fetchall()
-        for admin_chat_id, message_id in rows:
-            try:
-                requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/editMessageText",
-                    json={
-                        "chat_id": admin_chat_id,
-                        "message_id": message_id,
-                        "text": new_text,
-                        "parse_mode": "Markdown"
-                    },
-                    timeout=10
-                )
-            except Exception as e:
-                print(f"[edit_message] Erreur admin {admin_chat_id} msg {message_id}: {e}")
-    except Exception as e:
-        print("Erreur edit_all_admin_notifications:", e)
-    finally:
-        conn.close()
-
-def resend_order_to_all_admins(order_id: int):
-    if not BOT_TOKEN:
-        return
-
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    try:
-        c.execute("SELECT service, plan, price, cost, username, user_id, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
-        row = c.fetchone()
-        if not row:
-            return
-        
-        service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method = row
-        
-        admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
-        if username:
-            admin_text += f"👤 @{username}\n"
-        else:
-            admin_text += f"👤 ID: {user_id}\n"
-        admin_text += (
-            f"📦 {service_name}\n"
-            f"📋 {plan_label}\n"
-            f"💰 {price}€\n"
-            f"💵 Coût: {cost}€\n"
-            f"📈 Bénéf: {price - cost}€\n\n"
-            f"👤 {first_name} {last_name}\n"
-            f"📧 {email}\n"
-        )
-        if payment_method:
-            admin_text += f"💳 {payment_method}\n"
-        admin_text += f"\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-
-        keyboard = [[
-            {"text": "✋ Prendre", "callback_data": f"admin_take_{order_id}"},
-            {"text": "❌ Annuler", "callback_data": f"admin_cancel_{order_id}"}
-        ]]
-
-        for admin_id in ADMIN_IDS:
-            try:
-                response = requests.post(
-                    f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": admin_id,
-                        "text": admin_text,
-                        "parse_mode": "Markdown",
-                        "reply_markup": {"inline_keyboard": keyboard}
-                    },
-                    timeout=10
-                )
-                result = response.json()
-                if result.get('ok'):
-                    message_id = result['result']['message_id']
-                    c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
-                              (order_id, admin_id, message_id))
-            except Exception as e:
-                print(f"Erreur envoi admin {admin_id}: {e}")
-        
-        conn.commit()
-    except Exception as e:
-        print("Erreur resend_order_to_all_admins:", e)
-    finally:
-        conn.close()
-
-async def resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, username, user_id, first_name, last_name, email, payment_method):
-    admin_text = f"🔔 *COMMANDE #{order_id} REMISE EN LIGNE*\n\n"
-    if username:
-        admin_text += f"👤 @{username}\n"
-    else:
-        admin_text += f"👤 ID: {user_id}\n"
-    admin_text += (
-        f"📦 {service_name}\n"
-        f"📋 {plan_label}\n"
-        f"💰 {price}€\n"
-        f"💵 Coût: {cost}€\n"
-        f"📈 Bénéf: {price - cost}€\n\n"
-        f"👤 {first_name} {last_name}\n"
-        f"📧 {email}\n"
-    )
-    if payment_method:
-        admin_text += f"💳 {payment_method}\n"
-    admin_text += f"\n🕒 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
-
-    keyboard = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
-        InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
-    ]])
-
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
-    c = conn.cursor()
-    
-    for admin_id in ADMIN_IDS:
-        try:
-            msg = await context.bot.send_message(
-                chat_id=admin_id,
-                text=admin_text,
-                parse_mode='Markdown',
-                reply_markup=keyboard
-            )
-            c.execute("INSERT INTO order_messages (order_id, admin_id, message_id) VALUES (?, ?, ?)",
-                      (order_id, admin_id, msg.message_id))
-        except Exception as e:
-            print(f"Erreur envoi admin {admin_id}: {e}")
-    
-    conn.commit()
-    conn.close()
 
 # BOT TELEGRAM MAIN
 def run_bot():
