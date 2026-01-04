@@ -1,9 +1,10 @@
 # migrate_sqlite_to_postgres.py
-# Usage:
-# 1) pip install SQLAlchemy psycopg2-binary
-# 2) export DATABASE_URL='postgres://user:pass@host:port/dbname'
-# 3) python migrate_sqlite_to_postgres.py /path/to/orders.db
-
+# Usage on Render:
+# 1) Ensure DATABASE_URL env var is set in Render (Settings → Environment → DATABASE_URL)
+# 2) Deploy so the script is present on the container
+# 3) Open the service Shell in Render and run:
+#    python migrate_sqlite_to_postgres.py /path/to/orders.db
+#
 import sys
 import os
 from sqlalchemy import create_engine, MetaData, Table
@@ -20,7 +21,7 @@ if not os.path.exists(sqlite_path):
 
 DATABASE_URL = os.getenv('DATABASE_URL')
 if not DATABASE_URL:
-    print("Exportez d'abord DATABASE_URL (ex: export DATABASE_URL='postgres://...')")
+    print("Exportez d'abord DATABASE_URL en tant que variable d'environnement (Render Settings).")
     sys.exit(1)
 
 sqlite_url = f"sqlite:///{sqlite_path}"
