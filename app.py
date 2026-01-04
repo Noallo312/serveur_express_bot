@@ -1209,321 +1209,287 @@ HTML_USERS = '''<!DOCTYPE html>
 HTML_REACT_MANAGER = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Bot Manager - B4U Deals</title>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: Arial, Helvetica, sans-serif; background:#f5f7fa; margin:0; padding:20px; }
+        .top { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; }
+        .card { background:white; border-radius:10px; padding:16px; box-shadow:0 6px 18px rgba(0,0,0,0.08); margin-bottom:12px; }
+        .service-header { display:flex; align-items:center; gap:12px; }
+        .emoji { font-size:28px; }
+        .service-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
+        .plans { margin-top:12px; gap:8px; display:flex; flex-direction:column; }
+        .plan { display:flex; gap:8px; align-items:center; }
+        input[type="text"], input[type="number"], select { padding:8px; border:1px solid #ddd; border-radius:6px; }
+        button { background:#667eea; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
+        button.secondary { background:#10b981; }
+        .small { font-size:13px; color:#666; }
+        label { font-size:13px; color:#333; }
+        .muted { color:#888; font-size:13px; }
+        .save-global { position:fixed; right:20px; bottom:20px; padding:12px 16px; border-radius:12px; background:#f59e0b; color:white; box-shadow:0 8px 30px rgba(0,0,0,0.12); }
+    </style>
 </head>
 <body>
-    <div id="root"></div>
-    
-    <script type="text/babel">
-        const { useState, useEffect } = React;
-        
-        const Settings = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>;
-        const Edit2 = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>;
-        const Save = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7H5a2 2 0 00-2 2v9a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-3m-1 4l-3 3m0 0l-3-3m3 3V4" /></svg>;
-        const Eye = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" /></svg>;
-        const EyeOff = () => <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" /></svg>;
-        const AlertCircle = () => <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>;
+    <div class="top">
+        <div>
+            <h1>B4U Bot Manager</h1>
+            <div class="muted">Éditez la configuration des services et plans</div>
+        </div>
+        <div>
+            <a href="/dashboard"><button>← Dashboard</button></a>
+        </div>
+    </div>
 
-        const BotAdminManager = () => {
-            const [services, setServices] = useState({});
-            const [hasChanges, setHasChanges] = useState(false);
-            const [loading, setLoading] = useState(true);
+    <div id="content"></div>
 
-            useEffect(() => {
-                loadConfig();
-            }, []);
+    <button id="saveAll" class="save-global" style="display:none">Sauvegarder les changements</button>
 
-            const loadConfig = async () => {
-                try {
-                    const response = await fetch('/api/services');
-                    const data = await response.json();
-                    
-                    const servicesObj = {};
-                    data.services.forEach(service => {
-                        const plansObj = {};
-                        service.plans.forEach(plan => {
-                            plansObj[plan.plan_key] = {
-                                label: plan.label,
-                                price: plan.price,
-                                cost: plan.cost
-                            };
-                        });
-                        
-                        servicesObj[service.service_key] = {
-                            name: service.emoji + ' ' + service.display_name,
-                            active: service.active,
-                            visible: service.visible,
-                            category: service.category,
-                            plans: plansObj
-                        };
-                    });
-                    
-                    setServices(servicesObj);
-                    setLoading(false);
-                } catch (error) {
-                    console.error('Erreur chargement:', error);
-                    setLoading(false);
-                }
-            };
+    <script>
+    (function () {
+        const content = document.getElementById('content');
+        const saveAllBtn = document.getElementById('saveAll');
+        let servicesState = {};
+        let hasChanges = false;
 
-            const saveConfig = async () => {
-                try {
-                    for (const [serviceKey, service] of Object.entries(services)) {
-                        const parts = service.name.split(' ');
-                        const emoji = parts[0];
-                        const name = parts.slice(1).join(' ');
-                        
-                        await fetch(`/api/services/${serviceKey}`, {
-                            method: 'PUT',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                name: name,
-                                emoji: emoji,
-                                category: service.category,
-                                active: service.active,
-                                visible: service.visible
-                            })
-                        });
-                        
-                        for (const [planKey, plan] of Object.entries(service.plans)) {
-                            await fetch(`/api/services/${serviceKey}/plans/${planKey}`, {
-                                method: 'PUT',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify(plan)
-                            });
-                        }
-                    }
-                    
-                    setHasChanges(false);
-                    alert('✅ Configuration sauvegardée !');
-                    loadConfig();
-                } catch (error) {
-                    console.error('Erreur sauvegarde:', error);
-                    alert('❌ Erreur lors de la sauvegarde');
-                }
-            };
+        function setDirty(v) {
+            hasChanges = v;
+            saveAllBtn.style.display = v ? 'block' : 'none';
+        }
 
-            const updateService = (serviceId, updates) => {
-                setServices({
-                    ...services,
-                    [serviceId]: {
-                        ...services[serviceId],
-                        ...updates
-                    }
-                });
-                setHasChanges(true);
-            };
-
-            const updatePlan = (serviceId, planId, updates) => {
-                setServices({
-                    ...services,
-                    [serviceId]: {
-                        ...services[serviceId],
-                        plans: {
-                            ...services[serviceId].plans,
-                            [planId]: {
-                                ...services[serviceId].plans[planId],
-                                ...updates
-                            }
-                        }
-                    }
-                });
-                setHasChanges(true);
-            };
-
-            if (loading) {
-                return (
-                    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
-                        <div className="text-2xl font-bold text-indigo-600">Chargement...</div>
-                    </div>
-                );
+        async function loadServices() {
+            content.innerHTML = '<div class="card small">Chargement...</div>';
+            try {
+                const res = await fetch('/api/services');
+                const data = await res.json();
+                renderServices(data.services || []);
+            } catch (e) {
+                content.innerHTML = '<div class="card small">Erreur de chargement: ' + e.message + '</div>';
             }
+        }
 
-            return (
-                <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-4">
-                    <div className="max-w-7xl mx-auto mb-6">
-                        <div className="bg-white rounded-2xl shadow-lg p-6">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center gap-3">
-                                    <Settings />
-                                    <div>
-                                        <h1 className="text-3xl font-bold text-gray-800">B4U Bot Manager</h1>
-                                        <p className="text-gray-600">Gérez votre bot sans toucher au code</p>
-                                    </div>
-                                </div>
-                                <div className="flex gap-3">
-                                    {hasChanges && (
-                                        <button
-                                            onClick={saveConfig}
-                                            className="flex items-center gap-2 bg-green-500 text-white px-6 py-3 rounded-xl hover:bg-green-600 transition shadow-lg"
-                                        >
-                                            <Save />
-                                            Sauvegarder
-                                        </button>
-                                    )}
-                                    
-                                        href="/dashboard"
-                                        className="flex items-center gap-2 bg-gray-500 text-white px-6 py-3 rounded-xl hover:bg-gray-600 transition"
-                                    >
-                                        ← Dashboard
-                                    </a>
-                                </div>
-                            </div>
+        function renderServices(list) {
+            servicesState = {};
+            if (!Array.isArray(list) || list.length === 0) {
+                content.innerHTML = '<div class="card small">Aucun service trouvé</div>';
+                return;
+            }
+            content.innerHTML = '';
+            list.forEach(s => {
+                servicesState[s.service_key] = {
+                    _original: s,
+                    emoji: s.emoji || '',
+                    display_name: s.display_name || '',
+                    active: !!s.active,
+                    visible: !!s.visible,
+                    category: s.category || '',
+                    plans: {}
+                };
+                const card = document.createElement('div');
+                card.className = 'card';
+                card.innerHTML = `
+                    <div class="service-header">
+                        <div class="emoji">${s.emoji || '📦'}</div>
+                        <div>
+                            <div><strong class="service-title">${s.emoji} ${s.display_name}</strong></div>
+                            <div class="small">Clé: <code>${s.service_key}</code> · Catégorie: <span class="muted">${s.category}</span></div>
+                        </div>
+                        <div class="service-actions">
+                            <label><input type="checkbox" class="active-checkbox" ${s.active ? 'checked' : ''}> Actif</label>
+                            <label><input type="checkbox" class="visible-checkbox" ${s.visible ? 'checked' : ''}> Visible</label>
                         </div>
                     </div>
-
-                    <div className="max-w-7xl mx-auto">
-                        <div className="grid gap-4">
-                            {Object.entries(services).map(([serviceId, service]) => (
-                                <ServiceCard
-                                    key={serviceId}
-                                    serviceId={serviceId}
-                                    service={service}
-                                    onUpdate={updateService}
-                                    onUpdatePlan={updatePlan}
-                                />
-                            ))}
-                        </div>
+                    <div style="margin-top:10px;">
+                        <label>Emoji</label><br>
+                        <input type="text" class="input-emoji" value="${escapeHtml(s.emoji)}" style="width:80px;">
+                        <label style="margin-left:12px">Nom affiché</label><br>
+                        <input type="text" class="input-name" value="${escapeHtml(s.display_name)}" style="width:320px;">
+                        <label style="margin-left:12px">Catégorie</label><br>
+                        <input type="text" class="input-category" value="${escapeHtml(s.category)}" style="width:160px;">
                     </div>
-
-                    {hasChanges && (
-                        <div className="fixed bottom-6 right-6 bg-yellow-500 text-white px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3">
-                            <AlertCircle />
-                            <span className="font-semibold">Modifications non sauvegardées</span>
-                        </div>
-                    )}
-                </div>
-            );
-        };
-
-        const ServiceCard = ({ serviceId, service, onUpdate, onUpdatePlan }) => {
-            const [isExpanded, setIsExpanded] = useState(false);
-
-            return (
-                <div className="bg-white rounded-xl shadow-md overflow-hidden">
-                    <div className="p-6">
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-4 flex-1">
-                                <div className="text-3xl">{service.name.split(' ')[0]}</div>
-                                <div className="flex-1">
-                                    <h3 className="text-xl font-bold text-gray-800">{service.name}</h3>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <span className="text-sm text-gray-500">
-                                            Catégorie: {service.category}
-                                        </span>
-                                        <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
-                                            service.active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                                        }`}>
-                                            {service.active ? 'Actif' : 'Inactif'}
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="flex items-center gap-2">
-                                <button
-                                    onClick={() => onUpdate(serviceId, { visible: !service.visible })}
-                                    className={`p-2 rounded-lg transition ${
-                                        service.visible ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'
-                                    }`}
-                                >
-                                    {service.visible ? <Eye /> : <EyeOff />}
-                                </button>
-                                <button
-                                    onClick={() => setIsExpanded(!isExpanded)}
-                                    className="p-2 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 transition"
-                                >
-                                    {isExpanded ? '▲' : '▼'}
-                                </button>
-                            </div>
-                        </div>
-
-                        {isExpanded && (
-                            <div className="mt-6 space-y-4 border-t pt-4">
-                                <h4 className="font-semibold text-gray-700">Plans tarifaires ({Object.keys(service.plans).length})</h4>
-                                <div className="space-y-3">
-                                    {Object.entries(service.plans).map(([planId, plan]) => (
-                                        <PlanCard
-                                            key={planId}
-                                            planId={planId}
-                                            plan={plan}
-                                            onUpdate={(updates) => onUpdatePlan(serviceId, planId, updates)}
-                                        />
-                                    ))}
-                                </div>
-                            </div>
-                        )}
+                    <div class="plans">
+                        <h4 style="margin-top:12px; margin-bottom:6px;">Plans</h4>
+                        <div class="plans-list"></div>
                     </div>
-                </div>
-            );
-        };
+                `;
+                const plansList = card.querySelector('.plans-list');
 
-        const PlanCard = ({ planId, plan, onUpdate }) => {
-            const [isEditing, setIsEditing] = useState(false);
-            const profit = plan.price - plan.cost;
-            const margin = ((profit / plan.price) * 100).toFixed(1);
-
-            return (
-                <div className="bg-gray-50 rounded-lg p-4 border-2 border-gray-200">
-                    <div className="flex items-center justify-between">
-                        <div className="flex-1">
-                            {isEditing ? (
-                                <div className="space-y-2">
-                                    <input
-                                        type="text"
-                                        value={plan.label}
-                                        onChange={(e) => onUpdate({ label: e.target.value })}
-                                        className="w-full px-3 py-2 border rounded-lg"
-                                    />
-                                    <div className="grid grid-cols-2 gap-2">
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            value={plan.price}
-                                            onChange={(e) => onUpdate({ price: parseFloat(e.target.value) })}
-                                            className="px-3 py-2 border rounded-lg"
-                                        />
-                                        <input
-                                            type="number"
-                                            step="0.01"
-                                            value={plan.cost}
-                                            onChange={(e) => onUpdate({ cost: parseFloat(e.target.value) })}
-                                            className="px-3 py-2 border rounded-lg"
-                                        />
-                                    </div>
-                                </div>
-                            ) : (
-                                <div>
-                                    <h5 className="font-semibold text-gray-800">{plan.label}</h5>
-                                    <div className="flex items-center gap-4 mt-1 text-sm">
-                                        <span className="text-green-600 font-bold">{plan.price}€</span>
-                                        <span className="text-gray-500">Coût: {plan.cost}€</span>
-                                        <span className="text-blue-600 font-semibold">
-                                            Bénéf: {profit.toFixed(2)}€ ({margin}%)
-                                        </span>
-                                    </div>
-                                </div>
-                            )}
+                s.plans.forEach(plan => {
+                    servicesState[s.service_key].plans[plan.plan_key] = {
+                        label: plan.label,
+                        price: plan.price,
+                        cost: plan.cost
+                    };
+                    const planRow = document.createElement('div');
+                    planRow.className = 'plan';
+                    planRow.innerHTML = `
+                        <div style="flex:1">
+                            <div><strong>${escapeHtml(plan.plan_key)}</strong> · <span class="small">${escapeHtml(plan.label)}</span></div>
+                            <div class="small">Prix: <input type="number" step="0.01" class="input-price" value="${plan.price}" style="width:90px;"> € &nbsp;&nbsp; Coût: <input type="number" step="0.01" class="input-cost" value="${plan.cost}" style="width:90px;"></div>
                         </div>
+                        <div>
+                            <button class="btn-update-plan secondary">Enregistrer plan</button>
+                        </div>
+                    `;
+                    // wire plan inputs
+                    const inputPrice = planRow.querySelector('.input-price');
+                    const inputCost = planRow.querySelector('.input-cost');
+                    const btnUpdatePlan = planRow.querySelector('.btn-update-plan');
 
-                        <button
-                            onClick={() => setIsEditing(!isEditing)}
-                            className="p-2 bg-white rounded-lg hover:bg-gray-100 transition ml-3"
-                        >
-                            {isEditing ? <Save /> : <Edit2 />}
-                        </button>
-                    </div>
-                </div>
-            );
-        };
+                    inputPrice.addEventListener('change', () => {
+                        servicesState[s.service_key].plans[plan.plan_key].price = parseFloat(inputPrice.value) || 0;
+                        setDirty(true);
+                    });
+                    inputCost.addEventListener('change', () => {
+                        servicesState[s.service_key].plans[plan.plan_key].cost = parseFloat(inputCost.value) || 0;
+                        setDirty(true);
+                    });
 
-        ReactDOM.render(<BotAdminManager />, document.getElementById('root'));
+                    btnUpdatePlan.addEventListener('click', async () => {
+                        btnUpdatePlan.disabled = true;
+                        btnUpdatePlan.textContent = 'Enregistrement...';
+                        try {
+                            const payload = {
+                                label: servicesState[s.service_key].plans[plan.plan_key].label || plan.label,
+                                price: servicesState[s.service_key].plans[plan.plan_key].price,
+                                cost: servicesState[s.service_key].plans[plan.plan_key].cost
+                            };
+                            const resp = await fetch(`/api/services/${s.service_key}/plans/${plan.plan_key}`, {
+                                method: 'PUT',
+                                headers: {'Content-Type': 'application/json'},
+                                body: JSON.stringify(payload)
+                            });
+                            if (!resp.ok) throw new Error('Erreur réseau');
+                            btnUpdatePlan.textContent = '✔';
+                            setTimeout(() => btnUpdatePlan.textContent = 'Enregistrer plan', 1000);
+                            setDirty(false);
+                        } catch (e) {
+                            alert('Erreur sauvegarde plan: ' + e.message);
+                            btnUpdatePlan.disabled = false;
+                            btnUpdatePlan.textContent = 'Enregistrer plan';
+                        }
+                    });
+
+                    plansList.appendChild(planRow);
+                });
+
+                // wire top inputs
+                const inputEmoji = card.querySelector('.input-emoji');
+                const inputName = card.querySelector('.input-name');
+                const inputCategory = card.querySelector('.input-category');
+                const activeCheckbox = card.querySelector('.active-checkbox');
+                const visibleCheckbox = card.querySelector('.visible-checkbox');
+
+                function markAndUpdateHeader() {
+                    const titleEl = card.querySelector('.service-title');
+                    titleEl.textContent = (inputEmoji.value || '') + ' ' + (inputName.value || s.display_name);
+                }
+
+                inputEmoji.addEventListener('input', () => {
+                    servicesState[s.service_key].emoji = inputEmoji.value;
+                    markAndUpdateHeader();
+                    setDirty(true);
+                });
+                inputName.addEventListener('input', () => {
+                    servicesState[s.service_key].display_name = inputName.value;
+                    markAndUpdateHeader();
+                    setDirty(true);
+                });
+                inputCategory.addEventListener('input', () => {
+                    servicesState[s.service_key].category = inputCategory.value;
+                    card.querySelector('.muted').textContent = inputCategory.value;
+                    setDirty(true);
+                });
+                activeCheckbox.addEventListener('change', () => {
+                    servicesState[s.service_key].active = activeCheckbox.checked;
+                    setDirty(true);
+                });
+                visibleCheckbox.addEventListener('change', () => {
+                    servicesState[s.service_key].visible = visibleCheckbox.checked;
+                    setDirty(true);
+                });
+
+                // add save service button
+                const saveBtn = document.createElement('button');
+                saveBtn.textContent = 'Sauvegarder service';
+                saveBtn.style.marginLeft = '12px';
+                saveBtn.addEventListener('click', async () => {
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = 'Enregistrement...';
+                    try {
+                        const payload = {
+                            name: servicesState[s.service_key].display_name,
+                            emoji: servicesState[s.service_key].emoji,
+                            category: servicesState[s.service_key].category,
+                            active: !!servicesState[s.service_key].active,
+                            visible: !!servicesState[s.service_key].visible
+                        };
+                        const resp = await fetch(`/api/services/${s.service_key}`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(payload)
+                        });
+                        if (!resp.ok) throw new Error('Erreur réseau');
+                        saveBtn.textContent = '✔';
+                        setTimeout(() => saveBtn.textContent = 'Sauvegarder service', 1000);
+                        setDirty(false);
+                    } catch (e) {
+                        alert('Erreur sauvegarde service: ' + e.message);
+                        saveBtn.disabled = false;
+                        saveBtn.textContent = 'Sauvegarder service';
+                    }
+                });
+
+                card.querySelector('.service-actions').appendChild(saveBtn);
+                content.appendChild(card);
+            });
+        }
+
+        // global save button (saves each modified service and its plans)
+        saveAllBtn.addEventListener('click', async () => {
+            saveAllBtn.disabled = true;
+            saveAllBtn.textContent = 'Enregistrement...';
+            try {
+                for (const [serviceKey, s] of Object.entries(servicesState)) {
+                    // save service
+                    const payload = {
+                        name: s.display_name,
+                        emoji: s.emoji,
+                        category: s.category,
+                        active: !!s.active,
+                        visible: !!s.visible
+                    };
+                    await fetch(`/api/services/${serviceKey}`, {
+                        method: 'PUT',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify(payload)
+                    });
+                    // save plans
+                    for (const [planKey, p] of Object.entries(s.plans)) {
+                        await fetch(`/api/services/${serviceKey}/plans/${planKey}`, {
+                            method: 'PUT',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify(p)
+                        });
+                    }
+                }
+                alert('✅ Configuration sauvegardée');
+                setDirty(false);
+            } catch (e) {
+                alert('Erreur lors de la sauvegarde: ' + e.message);
+            } finally {
+                saveAllBtn.disabled = false;
+                saveAllBtn.textContent = 'Sauvegarder les changements';
+            }
+        });
+
+        function escapeHtml(str) {
+            if (!str && str !== 0) return '';
+            return String(str).replace(/[&<>"']/g, function(m){ return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[m]; });
+        }
+
+        loadServices();
+    })();
     </script>
 </body>
 </html>
