@@ -162,7 +162,9 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-DB_PATH = 'orders.db'
+# Use DB_PATH from environment if provided, else default to absolute path next to app.py
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.getenv('DB_PATH', os.path.join(BASE_DIR, 'orders.db'))
 
 # DATABASE
 def init_db():
@@ -257,27 +259,48 @@ def init_db():
 def load_services_from_db():
     """Charge la configuration des services depuis la BDD dans SERVICES_CONFIG (mémoire)."""
     global SERVICES_CONFIG
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-    c = conn.cursor()
-    c.execute("SELECT service_key, display_name, emoji, category, active, visible FROM services")
-    services = {}
-    for row in c.fetchall():
-        sk, display_name, emoji, category, active, visible = row
-        services[sk] = {
-            'name': f"{emoji} {display_name}".strip(),
-            'active': bool(active),
-            'visible': bool(visible),
-            'category': category,
-            'plans': {}
-        }
-    c.execute("SELECT service_key, plan_key, label, price, cost FROM plans")
-    for row in c.fetchall():
-        service_key, plan_key, label, price, cost = row
-        if service_key not in services:
-            continue
-        services[service_key]['plans'][plan_key] = {'label': label, 'price': price, 'cost': cost}
-    conn.close()
-    SERVICES_CONFIG = services
+    try:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        c = conn.cursor()
+        c.execute("SELECT service_key, display_name, emoji, category, active, visible FROM services")
+        services = {}
+        for row in c.fetchall():
+            sk, display_name, emoji, category, active, visible = row
+            services[sk] = {
+                'name': f"{(emoji or '').strip()} {display_name}".strip(),
+                'active': bool(active),
+                'visible': bool(visible),
+                'category': category,
+                'plans': {}
+            }
+        c.execute("SELECT service_key, plan_key, label, price, cost FROM plans")
+        for row in c.fetchall():
+            service_key, plan_key, label, price, cost = row
+            if service_key not in services:
+                continue
+            # ensure numeric types
+            try:
+                p = float(price) if price is not None else 0.0
+            except Exception:
+                p = 0.0
+            try:
+                cst = float(cost) if cost is not None else 0.0
+            except Exception:
+                cst = 0.0
+            services[service_key]['plans'][plan_key] = {'label': label, 'price': p, 'cost': cst}
+        conn.close()
+        SERVICES_CONFIG = services
+
+        # Debug: log what was loaded
+        print("=== Loaded services from DB (path={} ) ===".format(DB_PATH))
+        for sk, sd in SERVICES_CONFIG.items():
+            print(f" - {sk}: {sd.get('name')} (active={sd.get('active')}, visible={sd.get('visible')}, category={sd.get('category')})")
+            for pk, pd in sd.get('plans', {}).items():
+                print(f"    plan {pk}: label='{pd.get('label')}', price={pd.get('price')}, cost={pd.get('cost')}")
+        print("=== End loaded services ===")
+    except Exception as e:
+        print("Erreur load_services_from_db:", e)
+        traceback.print_exc()
 
 init_db()
 
@@ -946,7 +969,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
             try {
                 const response = await fetch('/api/simulate', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json'},
                     body: JSON.stringify(data)
                 });
 
@@ -1418,7 +1441,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                     planRow.innerHTML = `
                         <div style="flex:1">
                             <div><strong>${escapeHtml(plan.plan_key)}</strong> · <span class="small">${escapeHtml(plan.label)}</span></div>
-                            <div class="small">Prix: <input type="number" step="0.01" class="input-price" value="${plan.price}" style="width:90px;"> € &nbsp;&nbsp; Coût: <input type="number" step="0.01" class="input-cost" value="${plan.cost}" style="width:90px;"></div>
+                            <div class="small">Prix: <input type="number" step="0.01" class="input-price" value="${plan.price}" style="width:90px;"> € &nbsp;&nbsp; Coût: <input type="number" step="0.01" class="input-cost" value="${plan.cost}" style="width:90px;"> €</div>
                         </div>
                         <div>
                             <button class="btn-update-plan secondary">Enregistrer plan</button>
@@ -1670,6 +1693,16 @@ def users_page():
 @login_required
 def manager_page():
     return render_template_string(HTML_REACT_MANAGER)
+
+# Reload services endpoint to force re-read from DB without restart
+@app.route('/api/reload_services', methods=['POST'])
+@login_required
+def api_reload_services():
+    try:
+        load_services_from_db()
+        return jsonify({'success': True, 'message': 'Services rechargés depuis la DB', 'db_path': DB_PATH})
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 # API Routes pour le Manager React - DB-backed
 @app.route('/api/services', methods=['GET'])
