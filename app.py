@@ -1,5 +1,5 @@
 # Full app.py - Dashboard Utilisateurs + Gestion commandes Telegram + Stats cumulatives + Manager React
-# Version complète avec toutes les fonctionnalités
+# Version complète avec persistance des services/plans en BDD et API CRUD pour manager
 
 import os
 import sqlite3
@@ -21,7 +21,7 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
 
-# SERVICES_CONFIG
+# Default in-code configuration (used only for initial population)
 SERVICES_CONFIG = {
     'netflix': {
         'name': '🎬 Netflix',
@@ -162,10 +162,13 @@ def login_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
+DB_PATH = 'orders.db'
+
 # DATABASE
 def init_db():
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
+    # orders table
     c.execute('''CREATE TABLE IF NOT EXISTS orders
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
@@ -213,10 +216,71 @@ def init_db():
         c.execute("INSERT INTO cumulative_stats (id, total_revenue, total_profit, last_updated) VALUES (1, 0, 0, ?)",
                   (datetime.now().isoformat(),))
     
+    # New tables for services & plans
+    c.execute('''CREATE TABLE IF NOT EXISTS services
+                 (service_key TEXT PRIMARY KEY,
+                  display_name TEXT,
+                  emoji TEXT,
+                  category TEXT,
+                  active INTEGER DEFAULT 1,
+                  visible INTEGER DEFAULT 1)''')
+    
+    c.execute('''CREATE TABLE IF NOT EXISTS plans
+                 (service_key TEXT,
+                  plan_key TEXT,
+                  label TEXT,
+                  price REAL,
+                  cost REAL,
+                  PRIMARY KEY (service_key, plan_key),
+                  FOREIGN KEY (service_key) REFERENCES services(service_key) ON DELETE CASCADE)''')
+    
+    # If services table empty, populate from in-code SERVICES_CONFIG
+    c.execute("SELECT COUNT(*) FROM services")
+    if c.fetchone()[0] == 0:
+        for sk, sd in SERVICES_CONFIG.items():
+            # split name into emoji + display name if possible
+            name = sd.get('name', '')
+            parts = name.split(' ', 1)
+            emoji = parts[0] if len(parts) > 1 else ''
+            display_name = parts[1] if len(parts) > 1 else name
+            c.execute("INSERT INTO services (service_key, display_name, emoji, category, active, visible) VALUES (?, ?, ?, ?, ?, ?)",
+                      (sk, display_name, emoji, sd.get('category', ''), 1 if sd.get('active', True) else 0, 1 if sd.get('visible', True) else 0))
+            for pk, pd in sd.get('plans', {}).items():
+                c.execute("INSERT INTO plans (service_key, plan_key, label, price, cost) VALUES (?, ?, ?, ?, ?)",
+                          (sk, pk, pd.get('label', pk), pd.get('price', 0.0), pd.get('cost', 0.0)))
+    
     conn.commit()
     conn.close()
+    # Load services into memory
+    load_services_from_db()
+
+def load_services_from_db():
+    """Charge la configuration des services depuis la BDD dans SERVICES_CONFIG (mémoire)."""
+    global SERVICES_CONFIG
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT service_key, display_name, emoji, category, active, visible FROM services")
+    services = {}
+    for row in c.fetchall():
+        sk, display_name, emoji, category, active, visible = row
+        services[sk] = {
+            'name': f"{emoji} {display_name}".strip(),
+            'active': bool(active),
+            'visible': bool(visible),
+            'category': category,
+            'plans': {}
+        }
+    c.execute("SELECT service_key, plan_key, label, price, cost FROM plans")
+    for row in c.fetchall():
+        service_key, plan_key, label, price, cost = row
+        if service_key not in services:
+            continue
+        services[service_key]['plans'][plan_key] = {'label': label, 'price': price, 'cost': cost}
+    conn.close()
+    SERVICES_CONFIG = services
 
 init_db()
+
 # ----------------------- HTML TEMPLATES -----------------------
 HTML_LOGIN = '''<!DOCTYPE html>
 <html lang="fr">
@@ -687,21 +751,21 @@ HTML_DASHBOARD = '''<!DOCTYPE html>
 
         async function completeOrder(orderId) {
             if (confirm('Marquer cette commande comme terminée ?')) {
-                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/complete`, { method: 'POST' });
                 loadData();
             }
         }
 
         async function cancelOrder(orderId) {
             if (confirm('Annuler cette commande ?')) {
-                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/cancel`, { method: 'POST' });
                 loadData();
             }
         }
 
         async function restoreOrder(orderId) {
             if (confirm('Remettre cette commande en ligne ?')) {
-                await fetch(`/api/order/${orderId}/take`, { method: 'POST' });
+                await fetch(`/api/order/${orderId}/restore`, { method: 'POST' });
                 loadData();
             }
         }
@@ -908,6 +972,7 @@ HTML_SIMULATE = '''<!DOCTYPE html>
 </body>
 </html>
 '''
+
 HTML_USERS = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1148,7 +1213,7 @@ HTML_USERS = '''<!DOCTYPE html>
         }
 
         async function showDetails(userId, name, username) {
-            const response = const response = await fetch(`/api/users/${userId}`);
+            const response = await fetch(`/api/users/${userId}`);
             const data = await response.json();
             
             document.getElementById('modal-title').textContent = `📋 Commandes de ${name} (${username})`;
@@ -1206,6 +1271,7 @@ HTML_USERS = '''<!DOCTYPE html>
 </html>
 '''
 
+# Manager template (updated to support add/remove services & plans)
 HTML_REACT_MANAGER = '''<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -1220,7 +1286,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
         .emoji { font-size:28px; }
         .service-actions { margin-left:auto; display:flex; gap:8px; align-items:center; }
         .plans { margin-top:12px; gap:8px; display:flex; flex-direction:column; }
-        .plan { display:flex; gap:8px; align-items:center; }
+        .plan { display:flex; gap:8px; align-items:center; justify-content:space-between; }
         input[type="text"], input[type="number"], select { padding:8px; border:1px solid #ddd; border-radius:6px; }
         button { background:#667eea; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; }
         button.secondary { background:#10b981; }
@@ -1228,6 +1294,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
         label { font-size:13px; color:#333; }
         .muted { color:#888; font-size:13px; }
         .save-global { position:fixed; right:20px; bottom:20px; padding:12px 16px; border-radius:12px; background:#f59e0b; color:white; box-shadow:0 8px 30px rgba(0,0,0,0.12); }
+        .danger { background:#ef4444; }
     </style>
 </head>
 <body>
@@ -1238,6 +1305,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
         </div>
         <div>
             <a href="/dashboard"><button>← Dashboard</button></a>
+            <button id="addServiceBtn" style="margin-left:8px;">➕ Ajouter service</button>
         </div>
     </div>
 
@@ -1249,6 +1317,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
     (function () {
         const content = document.getElementById('content');
         const saveAllBtn = document.getElementById('saveAll');
+        const addServiceBtn = document.getElementById('addServiceBtn');
         let servicesState = {};
         let hasChanges = false;
 
@@ -1256,6 +1325,26 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
             hasChanges = v;
             saveAllBtn.style.display = v ? 'block' : 'none';
         }
+
+        addServiceBtn.addEventListener('click', async () => {
+            const key = prompt('Clé du service (ex: myservice) :');
+            if (!key) return;
+            const display_name = prompt('Nom affiché (ex: My Service) :') || key;
+            const emoji = prompt('Emoji (optionnel) :') || '';
+            const category = prompt('Catégorie (ex: streaming, music, ai) :') || '';
+            try {
+                const resp = await fetch('/api/services', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({service_key: key, display_name, emoji, category, active: true, visible: true})
+                });
+                if (!resp.ok) throw new Error('Erreur création service');
+                await loadServices();
+                alert('Service créé');
+            } catch (e) {
+                alert('Erreur: ' + e.message);
+            }
+        });
 
         async function loadServices() {
             content.innerHTML = '<div class="card small">Chargement...</div>';
@@ -1289,14 +1378,15 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                 card.className = 'card';
                 card.innerHTML = `
                     <div class="service-header">
-                        <div class="emoji">${s.emoji || '📦'}</div>
-                        <div>
-                            <div><strong class="service-title">${s.emoji} ${s.display_name}</strong></div>
-                            <div class="small">Clé: <code>${s.service_key}</code> · Catégorie: <span class="muted">${s.category}</span></div>
+                        <div class="emoji">${escapeHtml(s.emoji) || '📦'}</div>
+                        <div style="flex:1">
+                            <div><strong class="service-title">${escapeHtml(s.emoji)} ${escapeHtml(s.display_name)}</strong></div>
+                            <div class="small">Clé: <code>${escapeHtml(s.service_key)}</code> · Catégorie: <span class="muted">${escapeHtml(s.category)}</span></div>
                         </div>
                         <div class="service-actions">
-                            <label><input type="checkbox" class="active-checkbox" ${s.active ? 'checked' : ''}> Actif</label>
-                            <label><input type="checkbox" class="visible-checkbox" ${s.visible ? 'checked' : ''}> Visible</label>
+                            <label style="font-size:13px"><input type="checkbox" class="active-checkbox" ${s.active ? 'checked' : ''}> Actif</label>
+                            <label style="font-size:13px"><input type="checkbox" class="visible-checkbox" ${s.visible ? 'checked' : ''}> Visible</label>
+                            <button class="btn-delete-service danger" title="Supprimer le service">Supprimer</button>
                         </div>
                     </div>
                     <div style="margin-top:10px;">
@@ -1310,6 +1400,9 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                     <div class="plans">
                         <h4 style="margin-top:12px; margin-bottom:6px;">Plans</h4>
                         <div class="plans-list"></div>
+                        <div style="margin-top:8px;">
+                            <button class="btn-add-plan">➕ Ajouter plan</button>
+                        </div>
                     </div>
                 `;
                 const plansList = card.querySelector('.plans-list');
@@ -1329,12 +1422,14 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                         </div>
                         <div>
                             <button class="btn-update-plan secondary">Enregistrer plan</button>
+                            <button class="btn-delete-plan danger" style="margin-left:6px;">Supprimer</button>
                         </div>
                     `;
                     // wire plan inputs
                     const inputPrice = planRow.querySelector('.input-price');
                     const inputCost = planRow.querySelector('.input-cost');
                     const btnUpdatePlan = planRow.querySelector('.btn-update-plan');
+                    const btnDeletePlan = planRow.querySelector('.btn-delete-plan');
 
                     inputPrice.addEventListener('change', () => {
                         servicesState[s.service_key].plans[plan.plan_key].price = parseFloat(inputPrice.value) || 0;
@@ -1354,7 +1449,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                                 price: servicesState[s.service_key].plans[plan.plan_key].price,
                                 cost: servicesState[s.service_key].plans[plan.plan_key].cost
                             };
-                            const resp = await fetch(`/api/services/${s.service_key}/plans/${plan.plan_key}`, {
+                            const resp = await fetch(`/api/services/${encodeURIComponent(s.service_key)}/plans/${encodeURIComponent(plan.plan_key)}`, {
                                 method: 'PUT',
                                 headers: {'Content-Type': 'application/json'},
                                 body: JSON.stringify(payload)
@@ -1370,6 +1465,19 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                         }
                     });
 
+                    btnDeletePlan.addEventListener('click', async () => {
+                        if (!confirm('Supprimer ce plan ?')) return;
+                        try {
+                            const resp = await fetch(`/api/services/${encodeURIComponent(s.service_key)}/plans/${encodeURIComponent(plan.plan_key)}`, {
+                                method: 'DELETE'
+                            });
+                            if (!resp.ok) throw new Error('Erreur suppression');
+                            await loadServices();
+                        } catch (e) {
+                            alert('Erreur suppression plan: ' + e.message);
+                        }
+                    });
+
                     plansList.appendChild(planRow);
                 });
 
@@ -1379,6 +1487,8 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                 const inputCategory = card.querySelector('.input-category');
                 const activeCheckbox = card.querySelector('.active-checkbox');
                 const visibleCheckbox = card.querySelector('.visible-checkbox');
+                const btnDeleteService = card.querySelector('.btn-delete-service');
+                const btnAddPlan = card.querySelector('.btn-add-plan');
 
                 function markAndUpdateHeader() {
                     const titleEl = card.querySelector('.service-title');
@@ -1409,6 +1519,36 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                     setDirty(true);
                 });
 
+                btnDeleteService.addEventListener('click', async () => {
+                    if (!confirm('Supprimer ce service (toutes ses données) ?')) return;
+                    try {
+                        const resp = await fetch(`/api/services/${encodeURIComponent(s.service_key)}`, {method: 'DELETE'});
+                        if (!resp.ok) throw new Error('Erreur suppression');
+                        await loadServices();
+                    } catch (e) {
+                        alert('Erreur suppression service: ' + e.message);
+                    }
+                });
+
+                btnAddPlan.addEventListener('click', async () => {
+                    const plan_key = prompt('Clé du plan (ex: 1_mois) :');
+                    if (!plan_key) return;
+                    const label = prompt('Label du plan :') || plan_key;
+                    const price = parseFloat(prompt('Prix (ex: 9.99) :') || '0');
+                    const cost = parseFloat(prompt('Coût (ex: 2.5) :') || '0');
+                    try {
+                        const resp = await fetch(`/api/services/${encodeURIComponent(s.service_key)}/plans`, {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({plan_key, label, price, cost})
+                        });
+                        if (!resp.ok) throw new Error('Erreur création plan');
+                        await loadServices();
+                    } catch (e) {
+                        alert('Erreur création plan: ' + e.message);
+                    }
+                });
+
                 // add save service button
                 const saveBtn = document.createElement('button');
                 saveBtn.textContent = 'Sauvegarder service';
@@ -1418,13 +1558,13 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                     saveBtn.textContent = 'Enregistrement...';
                     try {
                         const payload = {
-                            name: servicesState[s.service_key].display_name,
+                            display_name: servicesState[s.service_key].display_name,
                             emoji: servicesState[s.service_key].emoji,
                             category: servicesState[s.service_key].category,
                             active: !!servicesState[s.service_key].active,
                             visible: !!servicesState[s.service_key].visible
                         };
-                        const resp = await fetch(`/api/services/${s.service_key}`, {
+                        const resp = await fetch(`/api/services/${encodeURIComponent(s.service_key)}`, {
                             method: 'PUT',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify(payload)
@@ -1453,20 +1593,20 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                 for (const [serviceKey, s] of Object.entries(servicesState)) {
                     // save service
                     const payload = {
-                        name: s.display_name,
+                        display_name: s.display_name,
                         emoji: s.emoji,
                         category: s.category,
                         active: !!s.active,
                         visible: !!s.visible
                     };
-                    await fetch(`/api/services/${serviceKey}`, {
+                    await fetch(`/api/services/${encodeURIComponent(serviceKey)}`, {
                         method: 'PUT',
                         headers: {'Content-Type': 'application/json'},
                         body: JSON.stringify(payload)
                     });
                     // save plans
                     for (const [planKey, p] of Object.entries(s.plans)) {
-                        await fetch(`/api/services/${serviceKey}/plans/${planKey}`, {
+                        await fetch(`/api/services/${encodeURIComponent(serviceKey)}/plans/${encodeURIComponent(planKey)}`, {
                             method: 'PUT',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify(p)
@@ -1475,6 +1615,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
                 }
                 alert('✅ Configuration sauvegardée');
                 setDirty(false);
+                await loadServices();
             } catch (e) {
                 alert('Erreur lors de la sauvegarde: ' + e.message);
             } finally {
@@ -1494,6 +1635,7 @@ HTML_REACT_MANAGER = '''<!DOCTYPE html>
 </body>
 </html>
 '''
+
 # Routes Flask
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -1529,69 +1671,215 @@ def users_page():
 def manager_page():
     return render_template_string(HTML_REACT_MANAGER)
 
-# API Routes pour le Manager React
+# API Routes pour le Manager React - DB-backed
 @app.route('/api/services', methods=['GET'])
 @login_required
 def api_services_list():
     services = []
     for service_key, service_data in SERVICES_CONFIG.items():
         plans = []
-        for plan_key, plan_data in service_data['plans'].items():
+        for plan_key, plan_data in service_data.get('plans', {}).items():
             plans.append({
                 'plan_key': plan_key,
-                'label': plan_data['label'],
-                'price': plan_data['price'],
-                'cost': plan_data['cost']
+                'label': plan_data.get('label', plan_key),
+                'price': plan_data.get('price', 0.0),
+                'cost': plan_data.get('cost', 0.0)
             })
-        
-        name_parts = service_data['name'].split(' ', 1)
-        emoji = name_parts[0] if len(name_parts) > 1 else '📦'
-        display_name = name_parts[1] if len(name_parts) > 1 else service_data['name']
-        
+        # split name into emoji and display_name
+        name_parts = service_data.get('name', '').split(' ', 1)
+        emoji = name_parts[0] if len(name_parts) > 1 else (service_data.get('name') or '')
+        display_name = name_parts[1] if len(name_parts) > 1 else (service_data.get('name') or service_key)
         services.append({
             'service_key': service_key,
             'emoji': emoji,
             'display_name': display_name,
-            'active': service_data['active'],
+            'active': service_data.get('active', True),
             'visible': service_data.get('visible', True),
-            'category': service_data['category'],
+            'category': service_data.get('category', ''),
             'plans': plans
         })
-    
     return jsonify({'services': services})
+
+@app.route('/api/services', methods=['POST'])
+@login_required
+def api_create_service():
+    data = request.get_json(force=True)
+    service_key = data.get('service_key')
+    display_name = data.get('display_name') or service_key
+    emoji = data.get('emoji') or ''
+    category = data.get('category') or ''
+    active = 1 if data.get('active', True) else 0
+    visible = 1 if data.get('visible', True) else 0
+
+    if not service_key:
+        return jsonify({'error': 'service_key_required'}), 400
+
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    try:
+        c.execute("SELECT 1 FROM services WHERE service_key=?", (service_key,))
+        if c.fetchone():
+            return jsonify({'error': 'service_exists'}), 409
+        c.execute("INSERT INTO services (service_key, display_name, emoji, category, active, visible) VALUES (?, ?, ?, ?, ?, ?)",
+                  (service_key, display_name, emoji, category, active, visible))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    finally:
+        conn.close()
+
+    load_services_from_db()
+    return jsonify({'success': True})
 
 @app.route('/api/services/<service_key>', methods=['PUT'])
 @login_required
 def api_update_service(service_key):
-    if service_key not in SERVICES_CONFIG:
+    data = request.get_json(force=True)
+    display_name = data.get('display_name') or ''
+    emoji = data.get('emoji') or ''
+    category = data.get('category') or ''
+    active = 1 if data.get('active', True) else 0
+    visible = 1 if data.get('visible', True) else 0
+
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM services WHERE service_key=?", (service_key,))
+    if not c.fetchone():
+        conn.close()
         return jsonify({'error': 'Service not found'}), 404
-    
-    data = request.get_json()
-    SERVICES_CONFIG[service_key]['name'] = f"{data['emoji']} {data['name']}"
-    SERVICES_CONFIG[service_key]['active'] = data['active']
-    SERVICES_CONFIG[service_key]['visible'] = data['visible']
-    SERVICES_CONFIG[service_key]['category'] = data['category']
-    
+    try:
+        c.execute("UPDATE services SET display_name=?, emoji=?, category=?, active=?, visible=? WHERE service_key=?",
+                  (display_name, emoji, category, active, visible, service_key))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    conn.close()
+    load_services_from_db()
+    return jsonify({'success': True})
+
+@app.route('/api/services/<service_key>', methods=['DELETE'])
+@login_required
+def api_delete_service(service_key):
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM services WHERE service_key=?", (service_key,))
+    if not c.fetchone():
+        conn.close()
+        return jsonify({'error': 'Service not found'}), 404
+    try:
+        c.execute("DELETE FROM plans WHERE service_key=?", (service_key,))
+        c.execute("DELETE FROM services WHERE service_key=?", (service_key,))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    conn.close()
+    load_services_from_db()
+    return jsonify({'success': True})
+
+@app.route('/api/services/<service_key>/plans', methods=['POST'])
+@login_required
+def api_create_plan(service_key):
+    data = request.get_json(force=True)
+    plan_key = data.get('plan_key')
+    label = data.get('label') or plan_key
+    price = float(data.get('price', 0) or 0)
+    cost = float(data.get('cost', 0) or 0)
+
+    if not plan_key:
+        return jsonify({'error': 'plan_key_required'}), 400
+
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM services WHERE service_key=?", (service_key,))
+    if not c.fetchone():
+        conn.close()
+        return jsonify({'error': 'Service not found'}), 404
+    try:
+        c.execute("SELECT 1 FROM plans WHERE service_key=? AND plan_key=?", (service_key, plan_key))
+        if c.fetchone():
+            conn.close()
+            return jsonify({'error': 'plan_exists'}), 409
+        c.execute("INSERT INTO plans (service_key, plan_key, label, price, cost) VALUES (?, ?, ?, ?, ?)",
+                  (service_key, plan_key, label, price, cost))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    conn.close()
+    load_services_from_db()
     return jsonify({'success': True})
 
 @app.route('/api/services/<service_key>/plans/<plan_key>', methods=['PUT'])
 @login_required
 def api_update_plan(service_key, plan_key):
-    if service_key not in SERVICES_CONFIG:
-        return jsonify({'error': 'Service not found'}), 404
-    if plan_key not in SERVICES_CONFIG[service_key]['plans']:
+    data = request.get_json(force=True)
+    label = data.get('label') if 'label' in data else None
+    price = data.get('price') if 'price' in data else None
+    cost = data.get('cost') if 'cost' in data else None
+
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM plans WHERE service_key=? AND plan_key=?", (service_key, plan_key))
+    if not c.fetchone():
+        conn.close()
         return jsonify({'error': 'Plan not found'}), 404
-    
-    data = request.get_json()
-    SERVICES_CONFIG[service_key]['plans'][plan_key].update(data)
-    
+    try:
+        updates = []
+        params = []
+        if label is not None:
+            updates.append("label=?")
+            params.append(label)
+        if price is not None:
+            updates.append("price=?")
+            params.append(float(price))
+        if cost is not None:
+            updates.append("cost=?")
+            params.append(float(cost))
+        if updates:
+            sql = "UPDATE plans SET " + ", ".join(updates) + " WHERE service_key=? AND plan_key=?"
+            params.extend([service_key, plan_key])
+            c.execute(sql, params)
+            conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    conn.close()
+    load_services_from_db()
     return jsonify({'success': True})
 
-# Autres routes API existantes
+@app.route('/api/services/<service_key>/plans/<plan_key>', methods=['DELETE'])
+@login_required
+def api_delete_plan(service_key, plan_key):
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM plans WHERE service_key=? AND plan_key=?", (service_key, plan_key))
+    if not c.fetchone():
+        conn.close()
+        return jsonify({'error': 'Plan not found'}), 404
+    try:
+        c.execute("DELETE FROM plans WHERE service_key=? AND plan_key=?", (service_key, plan_key))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({'error': 'db_error', 'detail': str(e)}), 500
+    conn.close()
+    load_services_from_db()
+    return jsonify({'success': True})
+
+# Other API routes (users, dashboard, orders, simulate) largely unchanged but use SERVICES_CONFIG in-memory that is synced with DB.
+
 @app.route('/api/users')
 @login_required
 def api_users():
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
     c.execute("SELECT COUNT(*) FROM users")
@@ -1637,7 +1925,7 @@ def api_users():
 @app.route('/api/users/<int:user_id>')
 @login_required
 def api_user_details(user_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
     c.execute("""SELECT id, service, plan, price, timestamp, status
@@ -1663,7 +1951,7 @@ def api_user_details(user_id):
 @app.route('/api/dashboard')
 @login_required
 def api_dashboard():
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
     c.execute("SELECT id, username, service, plan, price, cost, first_name, last_name, email, payment_method, status, admin_id, admin_username FROM orders ORDER BY id DESC")
@@ -1716,7 +2004,7 @@ def api_dashboard():
 @app.route('/api/order/<int:order_id>/take', methods=['POST'])
 @login_required
 def take_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE orders SET status='en_cours', admin_id=?, admin_username=?, taken_at=? WHERE id=?", 
               (999999, 'web_admin', datetime.now().isoformat(), order_id))
@@ -1732,7 +2020,7 @@ def take_order(order_id):
 @app.route('/api/order/<int:order_id>/complete', methods=['POST'])
 @login_required
 def complete_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
     c.execute("SELECT price, cost FROM orders WHERE id=?", (order_id,))
@@ -1754,7 +2042,7 @@ def complete_order(order_id):
 @app.route('/api/order/<int:order_id>/cancel', methods=['POST'])
 @login_required
 def cancel_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE orders SET status='annulee', cancelled_at=? WHERE id=?",
               (datetime.now().isoformat(), order_id))
@@ -1769,7 +2057,7 @@ def cancel_order(order_id):
 @app.route('/api/order/<int:order_id>/restore', methods=['POST'])
 @login_required
 def restore_order(order_id):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     c.execute("UPDATE orders SET status='en_attente', admin_id=NULL, admin_username=NULL, taken_at=NULL, cancelled_by=NULL, cancelled_at=NULL WHERE id=?",
               (order_id,))
@@ -1828,7 +2116,7 @@ def api_simulate():
                 'cost': plan_data['cost']
             })
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
 
     created_orders = []
@@ -1902,7 +2190,7 @@ def api_simulate():
 
 # Helper functions
 def update_user_activity(user_id, username, first_name, last_name):
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     now = datetime.now().isoformat()
     
@@ -1922,7 +2210,7 @@ def delete_other_admin_notifications(order_id: int, keeping_admin_id: int):
     if not BOT_TOKEN:
         return
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     try:
         c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=? AND admin_id!=?", (order_id, keeping_admin_id))
@@ -1951,7 +2239,7 @@ def edit_admin_notification(order_id: int, admin_id: int, new_text: str):
     if not BOT_TOKEN:
         return
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     try:
         c.execute("SELECT message_id FROM order_messages WHERE order_id=? AND admin_id=?", (order_id, admin_id))
@@ -1980,7 +2268,7 @@ def edit_all_admin_notifications(order_id: int, new_text: str):
     if not BOT_TOKEN:
         return
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     try:
         c.execute("SELECT admin_id, message_id FROM order_messages WHERE order_id=?", (order_id,))
@@ -2008,7 +2296,7 @@ def resend_order_to_all_admins(order_id: int):
     if not BOT_TOKEN:
         return
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     try:
         c.execute("SELECT service, plan, price, cost, username, user_id, first_name, last_name, email, payment_method FROM orders WHERE id=?", (order_id,))
@@ -2091,7 +2379,7 @@ async def resend_order_to_all_admins_async(context, order_id, service_name, plan
         InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
     ]])
 
-    conn = sqlite3.connect('orders.db', check_same_thread=False)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
     c = conn.cursor()
     
     for admin_id in ADMIN_IDS:
@@ -2109,6 +2397,7 @@ async def resend_order_to_all_admins_async(context, order_id, service_name, plan
     
     conn.commit()
     conn.close()
+
 # Telegram handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
@@ -2295,7 +2584,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.answer("Non autorisé", show_alert=True)
             return
 
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         c = conn.cursor()
         c.execute("SELECT service, plan, price, cost, user_id, username, first_name, last_name, email, payment_method, admin_id FROM orders WHERE id=?", (order_id,))
         row = c.fetchone()
@@ -2385,7 +2674,12 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             conn.commit()
             conn.close()
             
-            await resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, order_username, order_user_id, order_first_name, order_last_name, order_email, order_payment)
+            # resend asynchronously using the bot context
+            try:
+                # schedule resend via job queue if available, else use helper sync function
+                await resend_order_to_all_admins_async(context, order_id, service_name, plan_label, price, cost, order_username, order_user_id, order_first_name, order_last_name, order_email, order_payment)
+            except Exception as e:
+                print("Erreur resend async:", e)
             
             await query.answer("✅ Commande remise en ligne")
             return
@@ -2430,6 +2724,7 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.answer(answer_text)
         return
+
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     username = update.message.from_user.username or f"User_{user_id}"
@@ -2455,7 +2750,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("❌ Envoie les 3 informations : Nom, Prénom, Mail")
             return
         
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -2504,7 +2799,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                 )
 
                 try:
-                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    conn2 = sqlite3.connect(DB_PATH, check_same_thread=False)
                     c2 = conn2.cursor()
                     c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
                                   VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
@@ -2553,7 +2848,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             )
             return
         
-        conn = sqlite3.connect('orders.db', check_same_thread=False)
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
         c = conn.cursor()
         c.execute("""INSERT INTO orders 
                      (user_id, username, service, plan, price, cost, timestamp, status,
@@ -2599,7 +2894,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     reply_markup=keyboard
                 )
                 try:
-                    conn2 = sqlite3.connect('orders.db', check_same_thread=False)
+                    conn2 = sqlite3.connect(DB_PATH, check_same_thread=False)
                     c2 = conn2.cursor()
                     c2.execute("""INSERT INTO order_messages (order_id, admin_id, message_id)
                                   VALUES (?, ?, ?)""", (order_id, admin_id, msg.message_id))
