@@ -26,7 +26,9 @@ WEB_PASSWORD = os.getenv('WEB_PASSWORD')
 
 app = Flask(__name__)
 app.secret_key = os.getenv('SECRET_KEY', 'votre_secret_key_aleatoire_ici')
-	def login_required(f):
+
+# Décorateur pour protéger les routes admin
+def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
         if not session.get('logged_in'):
