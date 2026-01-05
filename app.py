@@ -2403,14 +2403,426 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_caption(caption="🎯 *B4U Deals*\n\nChoisis une catégorie :", parse_mode='Markdown', reply_markup=reply_markup)
         return
 
-    # admin actions handled similarly to previous logic — omitted here for brevity (kept in full file above)
-    # For admin_... callback handling see earlier parts of this file (keeps same behavior as original app).
+ # À ajouter dans la fonction button_callback, après les autres conditions
+
+    # Admin prend la commande
+    if data.startswith("admin_take_"):
+        order_id = int(data.replace("admin_take_", ""))
+        admin_id = query.from_user.id
+        admin_username = query.from_user.username or f"Admin_{admin_id}"
+        
+        session = SessionLocal()
+        try:
+            order = session.get(Order, order_id)
+            if not order:
+                await query.answer("❌ Commande introuvable", show_alert=True)
+                session.close()
+                return
+            
+            if order.status != 'en_attente':
+                await query.answer("❌ Commande déjà prise", show_alert=True)
+                session.close()
+                return
+            
+            # Mettre à jour la commande
+            order.status = 'en_cours'
+            order.admin_id = admin_id
+            order.admin_username = admin_username
+            order.taken_at = datetime.now().isoformat()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur prise commande: {e}")
+            await query.answer("❌ Erreur", show_alert=True)
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Supprimer les notifications des autres admins
+        delete_other_admin_notifications(order_id, admin_id)
+        
+        # Modifier le message de l'admin qui a pris
+        taken_text = (
+            f"🔒 *COMMANDE #{order_id} — PRISE EN CHARGE*\n\n"
+            f"✅ Pris en charge par @{admin_username}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✅ Terminer", callback_data=f"admin_complete_{order_id}"),
+                InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+            ],
+            [
+                InlineKeyboardButton("🔄 Remettre", callback_data=f"admin_restore_{order_id}")
+            ]
+        ])
+        
+        await query.edit_message_text(text=taken_text, parse_mode='Markdown', reply_markup=keyboard)
+        await query.answer("✅ Commande prise en charge")
+        return
+    
+    # Admin termine la commande
+    if data.startswith("admin_complete_"):
+        order_id = int(data.replace("admin_complete_", ""))
+        
+        session = SessionLocal()
+        try:
+            order = session.get(Order, order_id)
+            if not order:
+                await query.answer("❌ Commande introuvable", show_alert=True)
+                session.close()
+                return
+            
+            price = order.price or 0.0
+            cost = order.cost or 0.0
+            
+            # Mettre à jour les stats cumulatives
+            cs = session.get(CumulativeStats, 1)
+            if cs:
+                cs.total_revenue = (cs.total_revenue or 0.0) + price
+                cs.total_profit = (cs.total_profit or 0.0) + (price - cost)
+                cs.last_updated = datetime.now().isoformat()
+            
+            order.status = 'terminee'
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur terminer commande: {e}")
+            await query.answer("❌ Erreur", show_alert=True)
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Modifier tous les messages admin
+        completed_text = (
+            f"✅ *COMMANDE #{order_id} — TERMINÉE*\n\n"
+            f"Terminée par @{query.from_user.username or 'Admin'}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        edit_all_admin_notifications(order_id, completed_text)
+        await query.answer("✅ Commande terminée")
+        return
+    
+    # Admin annule la commande
+    if data.startswith("admin_cancel_"):
+        order_id = int(data.replace("admin_cancel_", ""))
+        
+        session = SessionLocal()
+        try:
+            order = session.get(Order, order_id)
+            if not order:
+                await query.answer("❌ Commande introuvable", show_alert=True)
+                session.close()
+                return
+            
+            order.status = 'annulee'
+            order.cancelled_by = query.from_user.id
+            order.cancelled_at = datetime.now().isoformat()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur annulation commande: {e}")
+            await query.answer("❌ Erreur", show_alert=True)
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Modifier tous les messages admin
+        cancelled_text = (
+            f"❌ *COMMANDE #{order_id} — ANNULÉE*\n\n"
+            f"Annulée par @{query.from_user.username or 'Admin'}\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        edit_all_admin_notifications(order_id, cancelled_text)
+        await query.answer("❌ Commande annulée")
+        return
+    
+    # Admin remet la commande en ligne
+    if data.startswith("admin_restore_"):
+        order_id = int(data.replace("admin_restore_", ""))
+        
+        session = SessionLocal()
+        try:
+            order = session.get(Order, order_id)
+            if not order:
+                await query.answer("❌ Commande introuvable", show_alert=True)
+                session.close()
+                return
+            
+            # Récupérer les infos avant de remettre en attente
+            service_name = order.service
+            plan_label = order.plan
+            price = order.price
+            cost = order.cost
+            username_order = order.username
+            user_id_order = order.user_id
+            first_name_order = order.first_name
+            last_name_order = order.last_name
+            email_order = order.email
+            payment_method_order = order.payment_method
+            
+            # Remettre en attente
+            order.status = 'en_attente'
+            order.admin_id = None
+            order.admin_username = None
+            order.taken_at = None
+            
+            # Supprimer les anciens messages admin
+            session.query(OrderMessage).filter(OrderMessage.order_id == order_id).delete()
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur remise en ligne: {e}")
+            await query.answer("❌ Erreur", show_alert=True)
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Renvoyer aux admins
+        await resend_order_to_all_admins_async(
+            context, order_id, service_name, plan_label, price, cost,
+            username_order, user_id_order, first_name_order, last_name_order,
+            email_order, payment_method_order
+        )
+        
+        await query.answer("🔄 Commande remise en ligne")
+        return
 
 async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # This function uses the same logic as previous implementation, adapted to SQLAlchemy models.
-    # Kept full behavior (omitted here for brevity) — it's implemented earlier in the file where forms are handled.
-    # For simplicity, we delegate to the same implementations above.
-    pass
+    user_id = update.message.from_user.id
+    username = update.message.from_user.username or f"User_{user_id}"
+    first_name = update.message.from_user.first_name or "Utilisateur"
+    last_name = update.message.from_user.last_name or ""
+    update_user_activity(user_id, username, first_name, last_name)
+    
+    if user_id not in user_states:
+        await update.message.reply_text("⚠️ Utilise /start pour commencer une commande")
+        return
+    
+    state = user_states[user_id]
+    text = update.message.text.strip()
+    
+    # Traitement formulaire Deezer (3 lignes: nom, prénom, email)
+    if state.get('step') == 'waiting_deezer_form':
+        lines = text.split('\n')
+        if len(lines) < 3:
+            await update.message.reply_text("❌ Format incorrect. Envoie 3 lignes:\n1. Nom\n2. Prénom\n3. Email")
+            return
+        
+        last_name_input = lines[0].strip()
+        first_name_input = lines[1].strip()
+        email = lines[2].strip()
+        
+        # Créer la commande dans la DB
+        session = SessionLocal()
+        try:
+            order = Order(
+                user_id=user_id,
+                username=username,
+                service=state['service_name'],
+                plan=state['plan_label'],
+                price=state['price'],
+                cost=state['cost'],
+                first_name=first_name_input,
+                last_name=last_name_input,
+                email=email,
+                payment_method=None,
+                timestamp=datetime.now().isoformat(),
+                status='en_attente'
+            )
+            session.add(order)
+            session.flush()
+            order_id = order.id
+            
+            # Mettre à jour le compteur de commandes de l'utilisateur
+            user = session.get(User, user_id)
+            if user:
+                user.total_orders = (user.total_orders or 0) + 1
+            
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur création commande Deezer: {e}")
+            await update.message.reply_text("❌ Erreur lors de la création de la commande")
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Confirmation client
+        await update.message.reply_text(
+            f"✅ *Commande #{order_id} enregistrée !*\n\n"
+            f"📦 {state['service_name']}\n"
+            f"📋 {state['plan_label']}\n"
+            f"💰 {state['price']}€\n\n"
+            f"👤 {first_name_input} {last_name_input}\n"
+            f"📧 {email}\n\n"
+            f"⏳ Un admin va te contacter rapidement !",
+            parse_mode='Markdown'
+        )
+        
+        # Notification admins
+        admin_text = (
+            f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
+            f"👤 @{username}\n"
+            f"📦 {state['service_name']}\n"
+            f"📋 {state['plan_label']}\n"
+            f"💰 {state['price']}€\n"
+            f"💵 Coût: {state['cost']}€\n"
+            f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
+            f"👤 {first_name_input} {last_name_input}\n"
+            f"📧 {email}\n\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+            ]
+        ])
+        
+        session = SessionLocal()
+        try:
+            for admin_id in ADMIN_IDS:
+                try:
+                    msg = await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=admin_text,
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                    om = OrderMessage(order_id=order_id, admin_id=admin_id, message_id=msg.message_id)
+                    session.add(om)
+                except Exception as e:
+                    print(f"Erreur envoi admin {admin_id}: {e}")
+            session.commit()
+        except Exception as e:
+            session.rollback()
+        finally:
+            session.close()
+        
+        del user_states[user_id]
+        return
+    
+    # Traitement formulaire standard (4 lignes: nom, prénom, email, paiement)
+    if state.get('step') == 'waiting_form':
+        lines = text.split('\n')
+        if len(lines) < 4:
+            await update.message.reply_text(
+                "❌ Format incorrect. Envoie 4 lignes:\n"
+                "1. Nom\n"
+                "2. Prénom\n"
+                "3. Email\n"
+                "4. Moyen de paiement (PayPal/Virement/Revolut)"
+            )
+            return
+        
+        last_name_input = lines[0].strip()
+        first_name_input = lines[1].strip()
+        email = lines[2].strip()
+        payment_method = lines[3].strip()
+        
+        # Créer la commande dans la DB
+        session = SessionLocal()
+        try:
+            order = Order(
+                user_id=user_id,
+                username=username,
+                service=state['service_name'],
+                plan=state['plan_label'],
+                price=state['price'],
+                cost=state['cost'],
+                first_name=first_name_input,
+                last_name=last_name_input,
+                email=email,
+                payment_method=payment_method,
+                timestamp=datetime.now().isoformat(),
+                status='en_attente'
+            )
+            session.add(order)
+            session.flush()
+            order_id = order.id
+            
+            # Mettre à jour le compteur de commandes de l'utilisateur
+            user = session.get(User, user_id)
+            if user:
+                user.total_orders = (user.total_orders or 0) + 1
+            
+            session.commit()
+        except Exception as e:
+            session.rollback()
+            print(f"Erreur création commande: {e}")
+            await update.message.reply_text("❌ Erreur lors de la création de la commande")
+            session.close()
+            return
+        finally:
+            session.close()
+        
+        # Confirmation client
+        await update.message.reply_text(
+            f"✅ *Commande #{order_id} enregistrée !*\n\n"
+            f"📦 {state['service_name']}\n"
+            f"📋 {state['plan_label']}\n"
+            f"💰 {state['price']}€\n\n"
+            f"👤 {first_name_input} {last_name_input}\n"
+            f"📧 {email}\n"
+            f"💳 {payment_method}\n\n"
+            f"⏳ Un admin va te contacter rapidement !",
+            parse_mode='Markdown'
+        )
+        
+        # Notification admins
+        admin_text = (
+            f"🔔 *NOUVELLE COMMANDE #{order_id}*\n\n"
+            f"👤 @{username}\n"
+            f"📦 {state['service_name']}\n"
+            f"📋 {state['plan_label']}\n"
+            f"💰 {state['price']}€\n"
+            f"💵 Coût: {state['cost']}€\n"
+            f"📈 Bénéf: {state['price'] - state['cost']}€\n\n"
+            f"👤 {first_name_input} {last_name_input}\n"
+            f"📧 {email}\n"
+            f"💳 {payment_method}\n\n"
+            f"🕐 {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+        )
+        
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("✋ Prendre", callback_data=f"admin_take_{order_id}"),
+                InlineKeyboardButton("❌ Annuler", callback_data=f"admin_cancel_{order_id}")
+            ]
+        ])
+        
+        session = SessionLocal()
+        try:
+            for admin_id in ADMIN_IDS:
+                try:
+                    msg = await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=admin_text,
+                        parse_mode='Markdown',
+                        reply_markup=keyboard
+                    )
+                    om = OrderMessage(order_id=order_id, admin_id=admin_id, message_id=msg.message_id)
+                    session.add(om)
+                except Exception as e:
+                    print(f"Erreur envoi admin {admin_id}: {e}")
+            session.commit()
+        except Exception as e:
+            session.rollback()
+        finally:
+            session.close()
+        
+        del user_states[user_id]
+        return
 
 # BOT TELEGRAM MAIN
 def run_bot():
